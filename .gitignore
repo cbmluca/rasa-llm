@@ -1,0 +1,8 @@
+.venv/
+.env
+__pycache__/
+.rasa/
+models/
+.DS_Store
+.vscode/
+*.log

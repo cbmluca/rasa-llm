@@ -1,0 +1,18 @@
+recipe: default.v1
+language: en
+
+pipeline:
+- name: WhitespaceTokenizer
+- name: LexicalSyntacticFeaturizer
+- name: CountVectorsFeaturizer
+- name: DIETClassifier
+  constrain_similarities: true
+  epochs: 40
+- name: RegexEntityExtractor             # helps with simple entities in examples
+- name: FallbackClassifier
+  threshold: 0.7
+  ambiguity_threshold: 0.1
+
+policies:
+- name: RulePolicy
+assistant_id: 20251028-200839-plumb-euphemism

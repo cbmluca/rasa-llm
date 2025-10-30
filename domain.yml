@@ -1,0 +1,69 @@
+# the bot’s capabilities (intents list, responses, custom actions names)
+version: "3.1"
+
+intents:
+  - ask_weather
+  - news_daily
+  - add_todo
+  - list_todos
+  - create_event
+  - out_of_scope
+  - list_events
+
+entities:
+  - city
+  - todo_text
+  - event_title
+  - event_start
+
+slots:
+  city:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: city
+
+  last_news_topic:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: custom
+
+  ctx_blob:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: custom
+
+  # (optional) keep these if you later want to persist across turns
+  todo_text:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: todo_text
+
+  event_title:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: event_title
+
+  event_start:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: event_start
+
+actions:
+  - action_get_weather
+  - action_add_todo
+  - action_list_todos
+  - action_create_ics
+  - action_llm_router
+  - action_list_events
+  - action_news_daily
+  - action_tool_router
