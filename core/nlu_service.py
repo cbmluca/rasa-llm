@@ -99,6 +99,24 @@ class NLUService:
         payload.update(result.entities or {})
         return payload
 
+    def build_metadata(self, result: NLUResult) -> Dict[str, Any]:
+        """Return lightweight annotations describing the detected domain."""
+
+        metadata: Dict[str, Any] = {}
+        if result.intent == "ask_weather":
+            metadata["domain"] = "weather"
+            if "time" in result.entities:
+                metadata["contains_time_hint"] = True
+        elif result.intent == "get_news":
+            metadata["domain"] = "news"
+            if result.entities.get("topic"):
+                metadata["topic"] = result.entities["topic"]
+        else:
+            metadata["domain"] = "general"
+
+        metadata["requires_tool"] = result.intent in {"ask_weather", "get_news"}
+        return metadata
+
     # --- Keyword scan utility -------------------------------------------------
     @staticmethod
     def _contains_keyword(text: str, keywords: set[str]) -> bool:

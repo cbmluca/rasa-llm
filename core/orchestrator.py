@@ -9,10 +9,12 @@ calling the language model.
 
 from __future__ import annotations
 
-from typing import Dict
+from time import perf_counter
+from typing import Any, Dict, Optional
 
+from core.learning_logger import LearningLogger, ReviewItem, TurnRecord
 from core.llm_router import LLMRouter
-from core.nlu_service import NLUService
+from core.nlu_service import NLUResult, NLUService
 from core.tool_registry import ToolRegistry
 from tools.news import format_news_list
 from tools.weather import format_weather_response
@@ -27,10 +29,17 @@ _FORMATTERS = {
 class Orchestrator:
     """Coordinates NLU, tool execution, and LLM routing."""
 
-    def __init__(self, nlu: NLUService, registry: ToolRegistry, router: LLMRouter) -> None:
+    def __init__(
+        self,
+        nlu: NLUService,
+        registry: ToolRegistry,
+        router: LLMRouter,
+        logger: Optional[LearningLogger] = None,
+    ) -> None:
         self._nlu = nlu
         self._registry = registry
         self._router = router
+        self._logger = logger
 
     # --- Tool response normalization: keep user replies consistent across tools
     def _format_tool_response(self, tool_name: str, result: Dict[str, object]) -> str:
@@ -45,31 +54,150 @@ class Orchestrator:
         return self._format_tool_response(tool_name, result)
 
     def handle_message(self, message: str) -> str:
-        if not message or not message.strip():
-            return "Please enter a message to get started."
+        start = perf_counter()
 
-        nlu_result = self._nlu.parse(message)
+        raw_message = message or ""
+        nlu_result = self._nlu.parse(raw_message)
+        is_confident = self._nlu.is_confident(nlu_result)
 
-    # --- Fast lane: prefer deterministic tools when NLU is confident
-        if self._nlu.is_confident(nlu_result) and nlu_result.intent in {"ask_weather", "get_news"}:
-            payload = self._nlu.build_payload(nlu_result, message)
+        response_text = ""
+        response_summary: Optional[str] = None
+        tool_name: Optional[str] = None
+        tool_payload: Optional[Dict[str, Any]] = None
+        tool_success: Optional[bool] = None
+        resolution_status = "unknown"
+        fallback_triggered = False
+        metadata: Dict[str, Any] | None = None
+        extras: Dict[str, Any] = self._nlu.build_metadata(nlu_result)
+        review_reason: Optional[str] = None
+
+        if not raw_message.strip():
+            response_text = "Please enter a message to get started."
+            resolution_status = "input_error"
+            extras["invocation_source"] = "input_validation"
+        elif is_confident and nlu_result.intent in {"ask_weather", "get_news"}:
+            payload = self._nlu.build_payload(nlu_result, raw_message)
+            tool_payload = payload
             tool_name = "weather" if nlu_result.intent == "ask_weather" else "news"
-            return self._run_tool(tool_name, payload)
+            extras["invocation_source"] = "nlu"
+            try:
+                response_text = self._run_tool(tool_name, payload)
+                tool_success = True
+                resolution_status = "tool:nlu"
+            except Exception as exc:  # pragma: no cover - defensive guard
+                tool_success = False
+                resolution_status = "tool_error"
+                response_text = "The selected tool failed to execute."
+                metadata = {"error": repr(exc)}
+                review_reason = "tool_error"
+        else:
+            decision = self._router.route(raw_message)
+            if isinstance(decision, dict) and decision.get("type") == "tool":
+                tool_name = str(decision.get("name", "")).strip()
+                if not tool_name:
+                    response_text = "The router did not provide a tool name."
+                    resolution_status = "router_error"
+                    review_reason = "router_missing_tool_name"
+                else:
+                    payload = decision.get("payload") or {}
+                    if not isinstance(payload, dict):
+                        response_text = "The router returned an invalid payload."
+                        resolution_status = "router_error"
+                        review_reason = "router_invalid_payload"
+                    else:
+                        tool_payload = payload
+                        extras["invocation_source"] = "router"
+                        try:
+                            response_text = self._run_tool(tool_name, payload)
+                            tool_success = True
+                            resolution_status = "tool:router"
+                        except Exception as exc:  # pragma: no cover - defensive guard
+                            tool_success = False
+                            resolution_status = "tool_error"
+                            response_text = "The selected tool failed to execute."
+                            metadata = {"error": repr(exc)}
+                            review_reason = "tool_error"
+            else:
+                fallback = self._router.general_answer(raw_message)
+                if fallback:
+                    response_text = fallback
+                    fallback_triggered = True
+                    resolution_status = "fallback"
+                    review_reason = review_reason or "fallback_response"
+                    extras["invocation_source"] = "fallback"
+                else:
+                    response_text = str(decision)
+                    resolution_status = "router_response"
+                    extras["invocation_source"] = "router"
 
-        decision = self._router.route(message)
-    # --- Router decision handling: validate LLM guidance before executing
-        if isinstance(decision, dict) and decision.get("type") == "tool":
-            tool_name = str(decision.get("name", "")).strip()
-            if not tool_name:
-                return "The router did not provide a tool name."
-            payload = decision.get("payload") or {}
-            if not isinstance(payload, dict):
-                return "The router returned an invalid payload."
-            return self._run_tool(tool_name, payload)
+        if not is_confident and review_reason is None:
+            review_reason = "low_confidence"
 
-        # Any non-tool outcome triggers a general ChatGPT fallback response.
-        fallback = self._router.general_answer(message)
-        if fallback:
-            return fallback
+        latency_ms = int((perf_counter() - start) * 1000)
+        response_summary = response_text[:160] if response_text else None
+        self._emit_logs(
+            raw_message,
+            nlu_result,
+            response_text,
+            response_summary,
+            tool_name,
+            tool_payload,
+            tool_success,
+            resolution_status,
+            fallback_triggered,
+            latency_ms,
+            metadata,
+            extras or {},
+            review_reason,
+        )
 
-        return str(decision)
+        return response_text
+
+    def _emit_logs(
+        self,
+        message: str,
+        nlu_result: NLUResult,
+        response_text: str,
+        response_summary: Optional[str],
+        tool_name: Optional[str],
+        tool_payload: Optional[Dict[str, Any]],
+        tool_success: Optional[bool],
+        resolution_status: str,
+        fallback_triggered: bool,
+        latency_ms: int,
+        metadata: Optional[Dict[str, Any]],
+        extras: Optional[Dict[str, Any]],
+        review_reason: Optional[str],
+    ) -> None:
+        if not self._logger or not self._logger.enabled:
+            return
+
+        turn_record = TurnRecord.new(
+            user_text=message,
+            intent=nlu_result.intent,
+            confidence=nlu_result.confidence,
+            entities=nlu_result.entities,
+            tool_name=tool_name,
+            tool_payload=tool_payload,
+            tool_success=tool_success,
+            response_text=response_text,
+            response_summary=response_summary,
+            resolution_status=resolution_status,
+            latency_ms=latency_ms,
+            fallback_triggered=fallback_triggered,
+            metadata=metadata,
+            extras=extras,
+        )
+        self._logger.log_turn(turn_record)
+
+        if review_reason:
+            review = ReviewItem.new(
+                user_text=message,
+                intent=nlu_result.intent,
+                confidence=nlu_result.confidence,
+                reason=review_reason,
+                tool_name=tool_name,
+                metadata=metadata,
+                extras=extras,
+            )
+            self._logger.log_review_item(review)
