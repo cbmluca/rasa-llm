@@ -1,3 +1,4 @@
+# Deprecated: functionality moved to tools/weather.py
 from ..http import get
 
 def geocode_city(name: str):

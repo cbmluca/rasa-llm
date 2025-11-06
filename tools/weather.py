@@ -1,25 +1,84 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Any, Optional
+import requests
 
+# low-level helpers (moved from actions/utils/weather_helpers.py)
 
-def run(payload: Dict[str, object]) -> Dict[str, object]:
-    location = str(payload.get("location", "your area")).title()
-    unit = payload.get("unit", "C")
-    temperature = 22 if unit.upper() == "C" else 71
+def geocode_city(name: str) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
 
+    r = requests.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": name, "count": 1},
+        timeout=8,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not data.get("results"):
+        return None
+    res = data["results"][0]
     return {
-        "type": "weather",
-        "location": location,
-        "temperature": temperature,
-        "unit": unit,
-        "conditions": "Partly cloudy",
+        "lat": res["latitude"],
+        "lon": res["longitude"],
+        "name": res["name"],
     }
 
 
-def format_weather_response(result: Dict[str, object]) -> str:
-    location = result.get("location", "the specified location")
-    temperature = result.get("temperature", "unknown")
-    unit = result.get("unit", "C")
-    conditions = result.get("conditions", "unknown conditions")
-    return f"The weather in {location} is {conditions} with a temperature of {temperature}°{unit}."
+def get_current_weather(lat: float, lon: float) -> Dict[str, Any]:
+    r = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": lat,
+            "longitude": lon,
+            "current": "temperature_2m,weather_code",
+        },
+        timeout=8,
+    )
+    r.raise_for_status()
+    return r.json().get("current", {})
+
+
+# --- tool-facing API (what the orchestrator / router will call) ---
+
+def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Expected payload:
+      { "city": "Copenhagen" }
+    """
+    city = (payload.get("city") or payload.get("location") or "").strip()
+    if not city:
+        return {"error": "missing_city", "message": "No city specified."}
+
+    loc = geocode_city(city)
+    if not loc:
+        return {"error": "not_found", "message": f"Could not find city '{city}'."}
+
+    wx = get_current_weather(loc["lat"], loc["lon"])
+    temp = wx.get("temperature_2m")
+    code = wx.get("weather_code")
+
+    return {
+        "type": "weather",
+        "city": loc["name"],
+        "temperature": temp,
+        "weather_code": code,
+    }
+
+
+def format_weather_response(result: Dict[str, Any]) -> str:
+    if "error" in result:
+        return result.get("message", "Weather error.")
+
+    city = result.get("city", "the specified city")
+    temp = result.get("temperature")
+    code = result.get("weather_code")
+
+    parts = [f"Weather in {city}"]
+    if temp is not None:
+        parts.append(f"{temp}°C")
+    if code is not None:
+        parts.append(f"(code {code})")
+
+    return ": ".join(parts)

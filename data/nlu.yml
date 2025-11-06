@@ -32,6 +32,14 @@ nlu:
     - a quick news brief
     - show me the headlines
 
+- intent: news_topic
+  examples: |
+    - news about quantum computing
+    - er der nyt om sygehusvæsenet?
+    - latest on the election
+    - any news on AI regulation?
+    - show me news about [Copenhagen]{"entity": "city"}
+
 - intent: add_todo
   examples: |
     - add todo [buy milk](todo_text)

@@ -11,6 +11,11 @@ rules:
     - intent: news_daily
     - action: action_news_daily
 
+- rule: topic news
+  steps:
+    - intent: news_topic
+    - action: action_llm_router
+
 - rule: Add todo
   steps:
     - intent: add_todo

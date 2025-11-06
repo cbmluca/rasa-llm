@@ -6,7 +6,7 @@
 # ------------------------------------------------------------
 
 from __future__ import annotations
-from .utils.weather_helpers import geocode_city, get_current_weather
+from tools.weather import geocode_city, get_current_weather
 
 import os
 import json
