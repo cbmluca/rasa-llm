@@ -11,3 +11,7 @@ def register(tool: Tool) -> None:
 
 def get_tool(name: str) -> Optional[Tool]:
     return _REGISTRY.get(name)
+
+def register_alias(alias: str, target: str) -> None:
+    if target in _REGISTRY:
+        _REGISTRY[alias] = _REGISTRY[target]

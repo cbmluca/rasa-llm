@@ -10,7 +10,7 @@ from .conf import NEWS_SEARCH_LIMIT
 
 class ActionToolRouter(Action):
     def name(self) -> str: 
-        return "action_tool_router"
+        return "action_llm_router"
 
     def run (
             self, 
@@ -39,6 +39,8 @@ class ActionToolRouter(Action):
             prev_topic = ctx.get_tool("news").get("topic")
             if prev_topic:
                 call["query"] = prev_topic
+            if tool_name == "topic_news":
+                tool_name = "news_search"
 
         tool = get_tool(tool_name)
         if not tool:

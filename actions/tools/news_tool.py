@@ -12,10 +12,10 @@ from ..conf import (
     NEWS_API_KEY, 
     NEWS_SEARCH_LIMIT, 
     NEWS_SEARCH_DAYS, 
-    NEWS_LOCAL_DAYS
+    NEWS_LOCAL_DAYS,
 )
 from ..http import get
-from .registry import register
+from .registry import register, register_alias
 
 def _google_news_rss(
         query: str, 
@@ -213,3 +213,4 @@ class NewsSearchTool:
 
 # register on import
 register(NewsSearchTool())
+register_alias("topic_news", "news_search")
