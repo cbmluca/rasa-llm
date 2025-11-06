@@ -45,11 +45,14 @@ class Orchestrator:
         return self._format_tool_response(tool_name, result)
 
     def handle_message(self, message: str) -> str:
+        if not message or not message.strip():
+            return "Please enter a message to get started."
+
         nlu_result = self._nlu.parse(message)
 
     # --- Fast lane: prefer deterministic tools when NLU is confident
         if self._nlu.is_confident(nlu_result) and nlu_result.intent in {"ask_weather", "get_news"}:
-            payload: Dict[str, object] = {"message": message}
+            payload = self._nlu.build_payload(nlu_result, message)
             tool_name = "weather" if nlu_result.intent == "ask_weather" else "news"
             return self._run_tool(tool_name, payload)
 
@@ -63,5 +66,10 @@ class Orchestrator:
             if not isinstance(payload, dict):
                 return "The router returned an invalid payload."
             return self._run_tool(tool_name, payload)
+
+        # Any non-tool outcome triggers a general ChatGPT fallback response.
+        fallback = self._router.general_answer(message)
+        if fallback:
+            return fallback
 
         return str(decision)

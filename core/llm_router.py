@@ -9,7 +9,7 @@ to the language model.
 from __future__ import annotations
 
 import json
-from typing import Iterable, Union
+from typing import Iterable, Union, List, Dict, Tuple
 
 
 class LLMRouter:
@@ -25,46 +25,98 @@ class LLMRouter:
         tools = "\n".join(f"- {name}" for name in self._enabled_tools) or "(no tools enabled)"
         return (
             "You are a router for a Rasa-based assistant.\n"
-            "When the user message is best handled by a tool, respond with JSON like\n"
-            '{"type": "tool", "name": "tool_name", "payload": {...}}.\n'
-            "If you want to respond directly, return plain text.\n"
+            "Always respond with JSON.\n"
+            "If a tool should be called, reply with {\"type\": \"tool\", \"name\": \"tool_name\", \"payload\": {...}}.\n"
+            "If no tool applies, reply with {\"type\": \"none\"}.\n"
             f"Available tools:\n{tools}\n"
             f"User: {message}"
         )
 
     # --- Response parsing: prefer structured instructions but fall back to text
-    def _parse_response(self, content: str) -> Union[str, dict]:
+    def _parse_response(self, content: str) -> Dict[str, object]:
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
-            return content.strip()
+            return {"type": "text", "content": content.strip()}
 
-        if isinstance(data, dict) and data.get("type") == "tool":
-            return data
-        return content.strip()
+        if isinstance(data, dict):
+            dtype = data.get("type")
+            if dtype == "tool":
+                payload = data.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                return {
+                    "type": "tool",
+                    "name": str(data.get("name", "")).strip(),
+                    "payload": payload,
+                }
+            if dtype in {"none", "no_tool"}:
+                return {"type": "none"}
 
-    def route(self, message: str) -> Union[str, dict]:
-        if not self._api_key:
-            return "LLM routing is not configured."
+        return {"type": "text", "content": content.strip()}
 
-        # --- Dependency guard: fail fast when OpenAI SDK is unavailable
-        try:
-            import openai
-        except ImportError:
-            return "LLM routing unavailable: OpenAI package is not installed."
-
+    def route(self, message: str) -> Union[str, Dict[str, object]]:
         prompt = self._build_prompt(message)
-        openai.api_key = self._api_key
+        content, error = self._chat_completion(
+            messages=[
+                {"role": "system", "content": "You only decide which tool should run."},
+                {"role": "user", "content": prompt},
+            ],
+            label="LLM routing",
+            temperature=0.0,
+        )
+        if error:
+            if "not configured" in error.lower():
+                return (
+                    "ChatGPT fallback requires an OPENAI_API_KEY environment variable. "
+                    "Set it to receive 'From ChatGPT' answers."
+                )
+            return error
+        if content is None:
+            return "LLM routing returned no content."
+        return self._parse_response(content)
 
-        # --- Remote call: capture API failures so Tier-1 falls back gracefully
+    def general_answer(self, message: str) -> str:
+        content, error = self._chat_completion(
+            messages=[
+                {"role": "system", "content": "You are ChatGPT helping a user after routing failed."},
+                {"role": "user", "content": message},
+            ],
+            label="ChatGPT fallback",
+            temperature=0.2,
+        )
+        if error:
+            return error
+        if not content:
+            return "ChatGPT fallback returned an empty response."
+        return f"From ChatGPT: {content.strip()}"
+
+    # --- Shared OpenAI helper ------------------------------------------------
+    def _chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        label: str,
+        temperature: float,
+    ) -> Tuple[str | None, str | None]:
+        if not self._api_key:
+            return None, f"{label} is not configured."
+
         try:
-            response = openai.ChatCompletion.create(
+            from openai import OpenAI
+        except ImportError:
+            return None, f"{label} unavailable: OpenAI package is not installed."
+
+        client = OpenAI(api_key=self._api_key)
+
+        try:
+            response = client.chat.completions.create(
                 model=self._model,
-                messages=[{"role": "system", "content": "You are a tool router."}, {"role": "user", "content": prompt}],
-                temperature=0.0,
+                messages=messages,
+                temperature=temperature,
             )
         except Exception as exc:  # pragma: no cover - network/credentials issues
-            return f"LLM routing failed: {exc}"  # return text fallback
+            return None, f"{label} failed: {exc}"
 
-        content = response["choices"][0]["message"]["content"]
-        return self._parse_response(content)
+        choice = response.choices[0]
+        content = getattr(choice.message, "content", None)
+        return content, None

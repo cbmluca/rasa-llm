@@ -5,6 +5,13 @@ from __future__ import annotations
 import os
 from typing import Dict, Iterable, List
 
+try:
+    from dotenv import load_dotenv  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
+else:
+    load_dotenv()
+
 # ---------------------------------------------------------------------------
 # Default configuration values
 # ---------------------------------------------------------------------------

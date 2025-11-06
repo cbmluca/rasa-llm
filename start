@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "Usage: start orch"
+  exit 1
+fi
+
+case "$1" in
+  orch|orchestrator)
+    shift
+    python -m app.main "$@"
+    ;;
+  *)
+    echo "Unknown shortcut '$1'. Available: orch"
+    exit 1
+    ;;
+esac

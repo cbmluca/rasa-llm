@@ -45,7 +45,9 @@ def main() -> None:
             break
 
         response = orchestrator.handle_message(message)
+        print()
         print(f"Assistant: {response}")
+        print()
 
 
 if __name__ == "__main__":
