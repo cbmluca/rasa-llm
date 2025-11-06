@@ -11,7 +11,7 @@ from .utils.weather_helpers import geocode_city, get_current_weather
 import os
 import json
 import datetime as dt
-from typing import Any, Dict, List, Text, Optional
+from typing import Any, Dict, List, Text
 
 # Rasa SDK
 from rasa_sdk import Action, Tracker
@@ -28,9 +28,9 @@ from .conf import (
     DR_RSS_LIMIT,
 )
 
-# testing
-from .conf import NEWS_USER_AGENT
-print(f"[CONF] NEWS_USER_AGENT={NEWS_USER_AGENT!r}") 
+
+# NOTE: importing NEWS_USER_AGENT ensures .conf loads environment vars eagerly
+from .conf import NEWS_USER_AGENT  # noqa: F401
 
 # Ensure local data dirs exist for lightweight persistence
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -38,40 +38,6 @@ EVENTS_DIR = os.path.join(DATA_DIR, "events")
 TODOS_PATH = os.path.join(DATA_DIR, "todos.json")
 os.makedirs(EVENTS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
-
-
-# ------------------------------------------------------------
-# Helpers: Weather (Open-Meteo, no API key)
-# ------------------------------------------------------------
-
-def _geocode_city(name: str) -> Optional[Dict[str, Any]]:
-    """Resolve a city name to lat/lon using Open-Meteo geocoding."""
-    if not name:
-        return None
-    r = get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": name, "count": 1},
-    )
-    r.raise_for_status()
-    data = r.json()
-    if not data.get("results"):
-        return None
-    res = data["results"][0]
-    return {"lat": res["latitude"], "lon": res["longitude"], "name": res["name"]}
-
-
-def _get_current_weather(lat: float, lon: float) -> Dict[str, Any]:
-    """Fetch current temperature and weather code from Open-Meteo."""
-    r = get(
-        "https://api.open-meteo.com/v1/forecast",
-        params={
-            "latitude": lat,
-            "longitude": lon,
-            "current": "temperature_2m,weather_code",
-        },
-    )
-    r.raise_for_status()
-    return r.json().get("current", {})
 
 
 # ------------------------------------------------------------
@@ -108,12 +74,20 @@ class ActionGetWeather(Action):
 
         # --- call your existing weather APIs here ---
         try:
-            # Example using your get_current_weather / geocode_city helpers
             loc = geocode_city(city)
+            if not loc:
+                dispatcher.utter_message(text=f"I couldn't find '{city}'.")
+                return []
+
             wx = get_current_weather(loc["lat"], loc["lon"])
             temp = wx.get("temperature_2m")
             code = wx.get("weather_code")
-            msg = f"Weather in {loc['name']}: {temp}°C (code {code})."
+            if temp is None:
+                dispatcher.utter_message(text="Weather data is unavailable right now.")
+                return []
+
+            code_text = f" (code {code})" if code is not None else ""
+            msg = f"Weather in {loc['name']}: {temp}°C{code_text}."
         except Exception as e:
             dispatcher.utter_message(text=f"Weather error: {e}")
             return []

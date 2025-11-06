@@ -1,14 +1,15 @@
+import json
 from typing import Optional, List, Dict, Any
+
 from rasa_sdk import Tracker
 from rasa_sdk.events import SlotSet
-import json
 
 class Ctx:
     def __init__(self, tracker: Tracker):
         self.t = tracker
 
     # -------- basic slot helpers --------
-    def get(self, key: str, default: Optional[str]=None) -> Optional[str]:
+    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
         val = self.t.get_slot(key)
         return val if isinstance(val, str) and val.strip() else default
 

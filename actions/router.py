@@ -1,16 +1,23 @@
-import os, requests, json
-from typing import Any, Text, Dict, List
+import json
+from typing import Any, Dict, List
+
 from rasa_sdk import Action, Tracker
 from rasa_sdk.executor import CollectingDispatcher
-from rasa_sdk.events import SlotSet
+
 from .context import Ctx
 from .tools.registry import get_tool
 from .conf import NEWS_SEARCH_LIMIT
 
 class ActionToolRouter(Action):
-    def name(self) -> str: return "action_tool_router"
+    def name(self) -> str: 
+        return "action_tool_router"
 
-    def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def run (
+            self, 
+            dispatcher: CollectingDispatcher, 
+            tracker: Tracker, 
+            domain: Dict[str, Any],
+     ) -> List[Dict[str, Any]]:
         ctx = Ctx(tracker)
         text = tracker.latest_message.get("text", "")
 
@@ -28,14 +35,10 @@ class ActionToolRouter(Action):
             return []
 
         # Reuse last topic if LLM omits it for news
-        if tool_name == "news_search":
-            # Reuse prior topic if missing
-            from .context import Ctx
-            ctx = Ctx(tracker)
-            if not call.get("query"):
-                prev = ctx.get_tool("news").get("topic")
-                if prev:
-                    call["query"] = prev
+        if tool_name == "news_search" and not call.get("query"):
+            prev_topic = ctx.get_tool("news").get("topic")
+            if prev_topic:
+                call["query"] = prev_topic
 
         tool = get_tool(tool_name)
         if not tool:
@@ -46,10 +49,8 @@ class ActionToolRouter(Action):
         call.setdefault("limit", NEWS_SEARCH_LIMIT)
 
         result = tool.run(call)
-        events = []
+        events: List[Dict[str, Any]] = []
         if tool_name == "news_search":
-            from .context import Ctx
-            ctx = Ctx(tracker)
             topic = (call.get("query") or "").strip()
             if topic:
                 events += ctx.update_tool("news", topic=topic)
