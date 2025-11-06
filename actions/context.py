@@ -1,3 +1,5 @@
+"""Context helpers for accessing tracker slots and persisted tool state."""
+
 import json
 from typing import Optional, List, Dict, Any
 
@@ -8,7 +10,7 @@ class Ctx:
     def __init__(self, tracker: Tracker):
         self.t = tracker
 
-    # -------- basic slot helpers --------
+    # --- Slot helper utilities --------------------------------------------------
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
         val = self.t.get_slot(key)
         return val if isinstance(val, str) and val.strip() else default
@@ -17,7 +19,7 @@ class Ctx:
         v = (value or "").strip() or None
         return [SlotSet(key, v)]
 
-    # -------- JSON blob helpers --------
+    # --- JSON blob utilities for tool state ------------------------------------
     def _load_blob(self) -> Dict[str, Any]:
         raw = self.get("ctx_blob", "{}") or "{}"
         try:

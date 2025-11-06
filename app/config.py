@@ -1,32 +1,38 @@
+"""Centralize defaults and environment lookups for the orchestrator."""
+
 from __future__ import annotations
 
 import os
 from typing import Dict, Iterable, List
 
-
+# ---------------------------------------------------------------------------
+# Default configuration values
+# ---------------------------------------------------------------------------
 _DEFAULT_NLU_THRESHOLD: float = 0.65
 _DEFAULT_LLM_MODEL: str = "gpt-4o-mini"
 _ENABLED_TOOLS: List[str] = ["weather", "news"]
 
-
+# ---------------------------------------------------------------------------
+# Accessors for static defaults
+# ---------------------------------------------------------------------------
 def get_nlu_threshold() -> float:
     """Return the confidence threshold used by the rule-based NLU."""
 
     return _DEFAULT_NLU_THRESHOLD
-
 
 def get_llm_model() -> str:
     """Return the model identifier used by the LLM router."""
 
     return _DEFAULT_LLM_MODEL
 
-
 def get_enabled_tools() -> Iterable[str]:
     """Return the names of tools that can be called by the LLM router."""
 
     return tuple(_ENABLED_TOOLS)
 
-
+# ---------------------------------------------------------------------------
+# Environment-derived settings
+# ---------------------------------------------------------------------------
 def get_llm_api_key(env: Dict[str, str] | None = None) -> str | None:
     """Return the API key for the LLM service.
 

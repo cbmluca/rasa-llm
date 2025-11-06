@@ -1,3 +1,11 @@
+"""Route Tier-1 messages through the LLM when heuristics cannot decide.
+
+The router prompts an LLM to choose between direct assistant responses and
+tool invocations. By encapsulating prompt assembly and response parsing, the
+module documents how Tier-1 stays auditable even when decisions are outsourced
+to the language model.
+"""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +20,7 @@ class LLMRouter:
         self._api_key = api_key
         self._enabled_tools = tuple(enabled_tools)
 
+    # --- Prompt construction: tell the LLM the contract before asking for help
     def _build_prompt(self, message: str) -> str:
         tools = "\n".join(f"- {name}" for name in self._enabled_tools) or "(no tools enabled)"
         return (
@@ -23,6 +32,7 @@ class LLMRouter:
             f"User: {message}"
         )
 
+    # --- Response parsing: prefer structured instructions but fall back to text
     def _parse_response(self, content: str) -> Union[str, dict]:
         try:
             data = json.loads(content)
@@ -37,6 +47,7 @@ class LLMRouter:
         if not self._api_key:
             return "LLM routing is not configured."
 
+        # --- Dependency guard: fail fast when OpenAI SDK is unavailable
         try:
             import openai
         except ImportError:
@@ -45,6 +56,7 @@ class LLMRouter:
         prompt = self._build_prompt(message)
         openai.api_key = self._api_key
 
+        # --- Remote call: capture API failures so Tier-1 falls back gracefully
         try:
             response = openai.ChatCompletion.create(
                 model=self._model,

@@ -1,9 +1,14 @@
+"""Configuration helpers that load environment-driven defaults for the action server."""
+
 import os
-from dotenv import load_dotenv;
+from dotenv import load_dotenv
 load_dotenv()  # load .env from project root
 
 # DR daily news
-DR_RSS_URL   = os.getenv("DR_RSS_URL", "https://www.dr.dk/nyheder/service/feeds/allenyheder")
+DR_RSS_URL   = os.getenv(
+    "DR_RSS_URL", 
+    "https://www.dr.dk/nyheder/service/feeds/allenyheder",
+    )
 DR_RSS_LIMIT = int(os.getenv("DR_RSS_LIMIT", "5"))
 
 # Topic news

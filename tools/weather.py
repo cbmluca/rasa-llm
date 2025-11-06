@@ -1,10 +1,15 @@
+"""Weather tool utilities for fetching and presenting current conditions.
+
+The module separates low-level helpers that call third-party APIs from the
+orchestrator-facing functions that prepare responses for the assistant.
+"""
+
 from __future__ import annotations
 
 from typing import Dict, Any, Optional
 import requests
 
-# low-level helpers (moved from actions/utils/weather_helpers.py)
-
+# --- External API helper functions -----------------------------------------
 def geocode_city(name: str) -> Optional[Dict[str, Any]]:
     if not name:
         return None
@@ -40,13 +45,9 @@ def get_current_weather(lat: float, lon: float) -> Dict[str, Any]:
     return r.json().get("current", {})
 
 
-# --- tool-facing API (what the orchestrator / router will call) ---
-
+# --- Orchestrator-facing tool functions ------------------------------------
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Expected payload:
-      { "city": "Copenhagen" }
-    """
+    """Resolve ``payload`` into the current weather for the requested city."""
     city = (payload.get("city") or payload.get("location") or "").strip()
     if not city:
         return {"error": "missing_city", "message": "No city specified."}
@@ -66,8 +67,9 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         "weather_code": code,
     }
 
-
+# --- Formatting helpers ----------------------------------------------------
 def format_weather_response(result: Dict[str, Any]) -> str:
+    """Create a short, human-friendly weather summary."""
     if "error" in result:
         return result.get("message", "Weather error.")
 

@@ -1,3 +1,5 @@
+"""Routing logic for delegating LLM requests to concrete action tools."""
+
 import json
 from typing import Any, Dict, List
 
@@ -9,7 +11,7 @@ from .tools import news_tool  # noqa: F401
 from .tools.registry import get_tool
 from .conf import NEWS_SEARCH_LIMIT
 
-
+# --- Intent helpers -----------------------------------------------------------
 def _intent_name(tracker: Tracker) -> str:
     intent = tracker.latest_message.get("intent") or {}
     return intent.get("name", "")
@@ -21,9 +23,11 @@ def _intent_confidence(tracker: Tracker) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+# --- Inference heuristics ----------------------------------------------------
 class ActionToolRouter(Action):
     def name(self) -> str: 
         return "action_llm_router"
+    # Heuristics for inferring tool calls when the LLM does not specify one.
     @staticmethod
     def _infer_call(
         tracker: Tracker,
@@ -67,11 +71,12 @@ class ActionToolRouter(Action):
             try:
                 call = json.loads(text)
             except Exception:
-                    call = {}
+                call = {}
 
         if not call:
             call = self._infer_call(tracker, text, ctx)
 
+        # --- Tool dispatch logic ------------------------------------------------
         tool_name = call.get("tool")
         if not tool_name:
             dispatcher.utter_message(text="I'm not sure which tool to use.")

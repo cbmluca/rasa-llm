@@ -1,3 +1,5 @@
+"""Assemble the orchestrator and run the interactive CLI loop."""
+
 from __future__ import annotations
 
 from app.config import (
@@ -12,7 +14,7 @@ from core.orchestrator import Orchestrator
 from core.tool_registry import ToolRegistry
 from tools import load_all_core_tools
 
-
+# -- Orchestrator construction -------------------------------------------------
 def build_orchestrator() -> Orchestrator:
     nlu = NLUService(get_nlu_threshold())
     registry = ToolRegistry()
@@ -26,7 +28,7 @@ def build_orchestrator() -> Orchestrator:
 
     return Orchestrator(nlu=nlu, registry=registry, router=router)
 
-
+# -- Interactive CLI loop ------------------------------------------------------
 def main() -> None:
     orchestrator = build_orchestrator()
     print("Tier 1 assistant ready. Type 'quit' or 'exit' to stop.")

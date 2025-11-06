@@ -1,8 +1,11 @@
+"""HTTP helpers that wrap a shared session configured for reliable news requests."""
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from .conf import NEWS_USER_AGENT
 
+# Shared session with retry/backoff defaults for outgoing requests.
 _session = requests.Session()
 _session.headers.update({
     "User-Agent": NEWS_USER_AGENT or "Mozilla/5.0",
