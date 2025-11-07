@@ -18,7 +18,7 @@ else:
 # ---------------------------------------------------------------------------
 _DEFAULT_NLU_THRESHOLD: float = 0.65
 _DEFAULT_LLM_MODEL: str = "gpt-4o-mini"
-_ENABLED_TOOLS: List[str] = ["weather", "news"]
+_ENABLED_TOOLS: List[str] = ["weather", "news", "todo_list", "kitchen_tips", "calendar_edit"]
 _DEFAULT_LOGGING_ENABLED: bool = True
 _DEFAULT_LOG_REDACTION_ENABLED: bool = True
 _DEFAULT_LOG_DIR = "logs"

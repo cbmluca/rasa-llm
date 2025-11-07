@@ -16,13 +16,27 @@ from core.learning_logger import LearningLogger, ReviewItem, TurnRecord
 from core.llm_router import LLMRouter
 from core.nlu_service import NLUResult, NLUService
 from core.tool_registry import ToolRegistry
+from tools.calendar_edit import format_calendar_response
+from tools.kitchen_tips import format_kitchen_tips_response
 from tools.news import format_news_list
+from tools.todo_list import format_todo_response
 from tools.weather import format_weather_response
 
 
 _FORMATTERS = {
     "weather": format_weather_response,
     "news": format_news_list,
+    "todo_list": format_todo_response,
+    "kitchen_tips": format_kitchen_tips_response,
+    "calendar_edit": format_calendar_response,
+}
+
+_TOOL_DOMAINS = {
+    "weather": "weather",
+    "news": "news",
+    "todo_list": "todo",
+    "kitchen_tips": "kitchen",
+    "calendar_edit": "calendar",
 }
 
 
@@ -49,9 +63,32 @@ class Orchestrator:
         return formatter(result)
 
     # --- Tool execution bridge: isolates registry lookup from call sites
-    def _run_tool(self, tool_name: str, payload: Dict[str, object]) -> str:
+    def _run_tool(self, tool_name: str, payload: Dict[str, object]) -> tuple[Dict[str, object], str]:
         result = self._registry.run_tool(tool_name, payload)
-        return self._format_tool_response(tool_name, result)
+        return result, self._format_tool_response(tool_name, result)
+
+    def _apply_tool_metadata(
+        self,
+        extras: Dict[str, Any],
+        tool_name: str,
+        result: Dict[str, object],
+    ) -> Dict[str, Any]:
+        metadata = dict(extras or {})
+        domain = ""
+        if isinstance(result, dict):
+            domain_candidate = result.get("domain")
+            if isinstance(domain_candidate, str):
+                domain = domain_candidate.strip()
+        if not domain:
+            domain = _TOOL_DOMAINS.get(tool_name, "")
+        if domain and metadata.get("domain") in (None, "", "general"):
+            metadata["domain"] = domain
+
+        if isinstance(result, dict):
+            action = result.get("action")
+            if isinstance(action, str) and action:
+                metadata[f"{tool_name}_action"] = action
+        return metadata
 
     def handle_message(self, message: str) -> str:
         start = perf_counter()
@@ -81,7 +118,8 @@ class Orchestrator:
             tool_name = "weather" if nlu_result.intent == "ask_weather" else "news"
             extras["invocation_source"] = "nlu"
             try:
-                response_text = self._run_tool(tool_name, payload)
+                result, response_text = self._run_tool(tool_name, payload)
+                extras = self._apply_tool_metadata(extras, tool_name, result)
                 tool_success = True
                 resolution_status = "tool:nlu"
             except Exception as exc:  # pragma: no cover - defensive guard
@@ -108,7 +146,8 @@ class Orchestrator:
                         tool_payload = payload
                         extras["invocation_source"] = "router"
                         try:
-                            response_text = self._run_tool(tool_name, payload)
+                            result, response_text = self._run_tool(tool_name, payload)
+                            extras = self._apply_tool_metadata(extras, tool_name, result)
                             tool_success = True
                             resolution_status = "tool:router"
                         except Exception as exc:  # pragma: no cover - defensive guard
