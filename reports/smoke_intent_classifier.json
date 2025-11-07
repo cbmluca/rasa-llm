@@ -1,0 +1,52 @@
+{
+  "timestamp": "2025-11-07T21:53:23.793214+00:00",
+  "data_count": 22,
+  "data_hash": "a25c0fd6ba05070519ee9e2d34ce168b73a7982ae0eaa2ecaa0b79dafc58b8e9",
+  "accuracy": 0.36363636363636365,
+  "macro_f1": 0.13333333333333333,
+  "class_counts": {
+    "nlu_fallback": 4,
+    "todo_list": 9,
+    "calendar_edit": 5,
+    "kitchen_tips": 4
+  },
+  "class_warnings": {},
+  "validation_mode": "train_test",
+  "min_class_samples": 1,
+  "confusion_matrix": {
+    "labels": [
+      "calendar_edit",
+      "kitchen_tips",
+      "nlu_fallback",
+      "todo_list"
+    ],
+    "matrix": [
+      [
+        0,
+        0,
+        0,
+        3
+      ],
+      [
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        4
+      ]
+    ]
+  },
+  "model_path": "models/smoke_intent_classifier.pkl",
+  "test_size": 0.5
+}

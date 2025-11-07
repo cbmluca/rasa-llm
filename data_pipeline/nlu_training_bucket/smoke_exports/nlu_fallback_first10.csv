@@ -1,0 +1,23 @@
+text,parser_intent,confidence,reason,timestamp,text_hash,reviewer_intent
+ell me something surprising.,nlu_fallback,0.4,fallback_response,2025-11-06T20:39:20.702116+00:00,54d26ea3846e1c463e156bd19ccbb4e0a78cf541766b47f58289b0b5cbe7c141,nlu_fallback
+Tell me something surprising.,nlu_fallback,0.4,fallback_response,2025-11-06T20:39:35.876548+00:00,913531cb456b45fbfcd705a7d27f672a65518a4dadb5b3baf2ce80c116f771be,nlu_fallback
+tell me something interesting,nlu_fallback,0.4,fallback_response,[REDACTED_PHONE]T20:55:[REDACTED_PHONE]+00:00,858cd5aba481052779e725dae818d1cb9e9b34c78e1aa237897c03115dd645c3,nlu_fallback
+whose phone number is this? [REDACTED_PHONE],nlu_fallback,0.4,fallback_response,[REDACTED_PHONE]T21:08:[REDACTED_PHONE]+00:00,30559229296021a46b0d229fedeb872ae593f851bc3e30ee9f02814bd0a765a1,nlu_fallback
+"add todo ""understand if LLM should be used for to-do's to structure unstructred request into SQL)",nlu_fallback,0.4,low_confidence,2025-11-06T21:47:35.100803+00:00,708c7e64bec4754b42bef1fa9f0c7e5d9d65d57ed06f24075982333ceabb739b,todo_list
+"add todo ""Tier X - apps integration"" with notes ""integrate calendar events with iCal, SHC app, Min Læge etc""",nlu_fallback,0.4,low_confidence,2025-11-06T22:01:13.845126+00:00,12d6fad3464b27782337739127e6c571e826d3f3488e1f2189ef6a7ee2b96b6d,todo_list
+"add todo ""Tier X - UI"" with note ""chatbot window at top, with todos view underneath. calendar perhaps also dedicated page, kitchen tips as RAG accessed via chatbot""",nlu_fallback,0.4,fallback_response,2025-11-06T22:16:11.463975+00:00,37d30a2dc265888ca000d39f2c488c2ff8969884f0439b57978aa05d747cce88,todo_list
+list todos,nlu_fallback,0.4,low_confidence,2025-11-07T07:35:05.430184+00:00,59f3b57bd313a67383399ac2ae77f03aee241a7a4b5aa05f7191174a5f9c3f52,todo_list
+list events,nlu_fallback,0.4,low_confidence,2025-11-07T07:37:10.405124+00:00,39630c8edae623eaff413b26676578e21bedc1433a2d6fa063cd796f9994f780,calendar_edit
+"add todo ""Renew SMK card"" deadline ""1/7/2026"" notes ""Check calendar"" and ""book omvisninger""",nlu_fallback,0.4,low_confidence,2025-11-07T10:09:09.109428+00:00,d64d7a113e191a5c37f0368886b018b3a4ea9d9b813e27a08a2f7e887e892c8f,todo_list
+"add todo ""Renew SMK card"" deadline ""1/7/2026"" notes ""Check benefits""",nlu_fallback,0.4,low_confidence,2025-11-07T15:33:06.200589+00:00,2314ea99531db2d65bd388f8fa2a59d14f4d7bc7784e0262cbf0afe14f67d13e,todo_list
+"remember buy wine for dinner tomorrow notes [""Check cellar"",""Pick from list""]",nlu_fallback,0.4,low_confidence,2025-11-07T15:34:13.382723+00:00,a17fe0a4cd599165a60d912d52b5803dd7c4e99c184f6375b72c7040ff1d2811,todo_list
+"update todo ""Tier X - apps integration"" status completed",nlu_fallback,0.4,low_confidence,2025-11-07T15:36:17.289865+00:00,1ff0fe928b387a735fe8f7be44f659bb8eab667ad2017477b0086e2b6c95b86f,todo_list
+kitchen tips list,nlu_fallback,0.4,low_confidence,2025-11-07T15:39:51.247468+00:00,b0f1abf9b4bc5e8b4428f2eb4be8b84568bb66f86d6cbc6e4d213bc9272a5817,kitchen_tips
+"add kitchen tip ""sear steaks at high heat first, then low heat until finished""",nlu_fallback,0.4,low_confidence,2025-11-07T15:42:52.746518+00:00,b98c932cd8bef3b6c8de56933dae3f775b26bace451055898e5ab7d369686503,kitchen_tips
+kitchen tips get boil_pasta,nlu_fallback,0.4,low_confidence,2025-11-07T15:46:53.363737+00:00,977bd784f6ab7699d7ddf3bfffcdba8be33e5111f1c6242d49cf4af01411a3da,kitchen_tips
+kitchen tips search herbs,nlu_fallback,0.4,low_confidence,2025-11-07T15:47:00.916409+00:00,a92dd1735d1610279d91fd7d063d94d78031cc4abd1546337a4817346d35d2b5,kitchen_tips
+"calendar create title ""Standup"" start [REDACTED_PHONE]T09:00 end [REDACTED_PHONE]T10:00 notes ""Daily sync"" location ""HQ"" link [REDACTED_URL]",nlu_fallback,0.4,low_confidence,2025-11-07T15:47:22.022491+00:00,aef3985eb7418afb7cd57075ee5eace61a466841ef316e5e0fbb84952b164ef2,calendar_edit
+"calendar create ""Standup"" at 1/9/2026, ending 2/9/2026.Notes: ""Daily sync"" and location ""HQ"" link [REDACTED_URL]",nlu_fallback,0.4,low_confidence,2025-11-07T15:48:17.350556+00:00,61eb1164348d00edd5650e70fc1ebf33c25d31bca2c99145b6e7e079607ee421,calendar_edit
+"calendar update Standup link """" location ""Remote""",nlu_fallback,0.4,low_confidence,2025-11-07T15:49:48.052189+00:00,1e62088cc163e3411b5e3257e85539f01742e7bbd7e08e324d8ddeec3974e4c7,calendar_edit
+calendar list,nlu_fallback,0.4,fallback_response,2025-11-07T15:51:13.777254+00:00,118cdbcf2e2dc41bcfb0600f43f480d93321ab585a6531dc1afc9fe741bfd5a6,calendar_edit
+list tods,nlu_fallback,0.4,low_confidence,2025-11-07T17:22:51.567147+00:00,e84be563fc1c9ad85efaa923fb8d9845cb5892433b3ab377c2c04241a9561bb4,todo_list

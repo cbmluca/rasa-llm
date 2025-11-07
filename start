@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ $# -eq 0 ]; then
-  echo "Usage: start orch"
+  echo "Usage: start orch|web"
   exit 1
 fi
 
@@ -12,8 +12,12 @@ case "$1" in
     shift
     python -m app.main "$@"
     ;;
+  web|ui)
+    shift
+    python -m app.web_api "$@"
+    ;;
   *)
-    echo "Unknown shortcut '$1'. Available: orch"
+    echo "Unknown shortcut '$1'. Available: orch, web"
     exit 1
     ;;
 esac

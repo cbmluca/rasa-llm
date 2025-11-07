@@ -8,9 +8,10 @@ deterministic extraction path before the LLM router is considered.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from core.command_parser import parse_command
+from core.intent_classifier import ClassifierPrediction, IntentClassifier
 
 
 @dataclass
@@ -18,13 +19,22 @@ class NLUResult:
     intent: str
     confidence: float
     entities: Dict[str, Any] = field(default_factory=dict)
+    source: str = "parser"
 
 
 class NLUService:
     """Minimal deterministic NLU used for Tier 1 orchestration."""
 
-    def __init__(self, threshold: float) -> None:
+    def __init__(
+        self,
+        threshold: float,
+        *,
+        classifier: Optional[IntentClassifier] = None,
+        classifier_threshold: float = 0.55,
+    ) -> None:
         self._threshold = threshold
+        self._classifier = classifier
+        self._classifier_threshold = classifier_threshold
 
     def parse(self, message: str) -> NLUResult:
         original = message or ""
@@ -39,9 +49,15 @@ class NLUService:
                 entities=command.payload,
             )
 
+        classified = self._classify(original)
+        if classified:
+            return classified
+
         return NLUResult(intent="nlu_fallback", confidence=0.4)
 
     def is_confident(self, result: NLUResult) -> bool:
+        if result.source == "classifier":
+            return result.confidence >= self._classifier_threshold
         return result.confidence >= self._threshold
 
     def build_payload(self, result: NLUResult, message: str) -> Dict[str, Any]:
@@ -65,8 +81,23 @@ class NLUService:
         if result.intent == "news" and result.entities.get("topic"):
             metadata["topic"] = result.entities["topic"]
 
+        if result.source == "classifier":
+            metadata["invocation_source"] = "classifier"
+            metadata["classifier_intent"] = result.intent
+            metadata["classifier_confidence"] = result.confidence
+
         metadata["requires_tool"] = result.intent != "nlu_fallback"
         return metadata
+
+    def _classify(self, message: str) -> Optional[NLUResult]:
+        if not self._classifier:
+            return None
+        prediction: Optional[ClassifierPrediction] = self._classifier.predict(message)
+        if not prediction:
+            return None
+        if prediction.confidence < self._classifier_threshold:
+            return None
+        return NLUResult(intent=prediction.intent, confidence=prediction.confidence, source="classifier")
 
 
 __all__ = ["NLUResult", "NLUService"]

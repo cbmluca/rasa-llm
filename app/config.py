@@ -25,9 +25,15 @@ _DEFAULT_LOG_DIR = "logs"
 _DEFAULT_REVIEW_QUEUE_DIR = "data_pipeline/nlu_training_bucket"
 _TURN_LOG_FILENAME = "turns.jsonl"
 _REVIEW_QUEUE_FILENAME = "pending.jsonl"
+_LABELED_QUEUE_FILENAME = "labeled_prompts.jsonl"
 _DEFAULT_LOG_REDACTION_PATTERNS = "email,phone,credit_card,gov_id,url"
 _DEFAULT_LOG_MAX_BYTES = 1_000_000
 _DEFAULT_LOG_BACKUP_COUNT = 5
+_DEFAULT_CLASSIFIER_MODEL_PATH = "models/intent_classifier.pkl"
+_DEFAULT_CLASSIFIER_MIN_SCORE = 0.55
+_DEFAULT_WEB_UI_ENABLED: bool = True
+_DEFAULT_WEB_UI_HOST = "127.0.0.1"
+_DEFAULT_WEB_UI_PORT = 9000
 
 # ---------------------------------------------------------------------------
 # Accessors for static defaults
@@ -108,6 +114,12 @@ def get_review_queue_path(env: Dict[str, str] | None = None) -> Path:
     return get_review_queue_dir(env) / _REVIEW_QUEUE_FILENAME
 
 
+def get_labeled_queue_path(env: Dict[str, str] | None = None) -> Path:
+    """Return the path where reviewer-labeled prompts are stored."""
+
+    return get_review_queue_dir(env) / _LABELED_QUEUE_FILENAME
+
+
 def is_log_redaction_enabled(env: Dict[str, str] | None = None) -> bool:
     """Determine whether sensitive values should be scrubbed before logging."""
 
@@ -160,3 +172,55 @@ def get_log_backup_count(env: Dict[str, str] | None = None) -> int:
     except ValueError:
         return _DEFAULT_LOG_BACKUP_COUNT
     return max(value, 0)
+
+
+def get_classifier_model_path(env: Dict[str, str] | None = None) -> Path:
+    """Return the on-disk path to the serialized intent classifier."""
+
+    source = env if env is not None else os.environ
+    override = source.get("CLASSIFIER_MODEL_PATH")
+    return Path(override) if override else Path(_DEFAULT_CLASSIFIER_MODEL_PATH)
+
+
+def get_classifier_min_score(env: Dict[str, str] | None = None) -> float:
+    """Return the minimum classifier confidence required to trust a prediction."""
+
+    source = env if env is not None else os.environ
+    raw = source.get("CLASSIFIER_MIN_SCORE")
+    if raw is None:
+        return _DEFAULT_CLASSIFIER_MIN_SCORE
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_CLASSIFIER_MIN_SCORE
+    return min(max(value, 0.0), 1.0)
+
+
+def is_web_ui_enabled(env: Dict[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    raw = source.get("WEB_UI_ENABLED")
+    if raw is None:
+        return _DEFAULT_WEB_UI_ENABLED
+    normalized = raw.strip().lower()
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    return _DEFAULT_WEB_UI_ENABLED
+
+
+def get_web_ui_host(env: Dict[str, str] | None = None) -> str:
+    source = env if env is not None else os.environ
+    return source.get("WEB_UI_HOST", _DEFAULT_WEB_UI_HOST)
+
+
+def get_web_ui_port(env: Dict[str, str] | None = None) -> int:
+    source = env if env is not None else os.environ
+    raw = source.get("WEB_UI_PORT")
+    if raw is None:
+        return _DEFAULT_WEB_UI_PORT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_WEB_UI_PORT
+    return value if 0 < value <= 65535 else _DEFAULT_WEB_UI_PORT

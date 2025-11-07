@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.config import (
+    get_classifier_min_score,
+    get_classifier_model_path,
     get_enabled_tools,
     get_llm_api_key,
     get_llm_model,
@@ -20,11 +22,17 @@ from core.llm_router import LLMRouter
 from core.nlu_service import NLUService
 from core.orchestrator import Orchestrator
 from core.tool_registry import ToolRegistry
+from core.intent_classifier import IntentClassifier
 from tools import load_all_core_tools
 
 # -- Orchestrator construction -------------------------------------------------
 def build_orchestrator() -> Orchestrator:
-    nlu = NLUService(get_nlu_threshold())
+    classifier = IntentClassifier(get_classifier_model_path())
+    nlu = NLUService(
+        get_nlu_threshold(),
+        classifier=classifier,
+        classifier_threshold=get_classifier_min_score(),
+    )
     registry = ToolRegistry()
     load_all_core_tools(registry)
 

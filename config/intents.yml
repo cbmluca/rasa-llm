@@ -1,0 +1,22 @@
+intents:
+  - name: weather
+    tool: weather
+    description: "Forecasts and current conditions powered by Open-Meteo."
+  - name: news
+    tool: news
+    description: "Headline lookups routed through the shared NewsService."
+  - name: todo_list
+    tool: todo_list
+    description: "CRUD actions for the JSON-backed todo list."
+  - name: kitchen_tips
+    tool: kitchen_tips
+    description: "Search or list kitchen tips stored in the local catalog."
+  - name: calendar_edit
+    tool: calendar_edit
+    description: "Add, update, delete, or list calendar events."
+  - name: app_guide
+    tool: app_guide
+    description: "Modify or inspect the App Guide knowledge base."
+  - name: nlu_fallback
+    tool: null
+    description: "Fallback intent used when deterministic parsing fails."

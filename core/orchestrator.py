@@ -9,6 +9,7 @@ calling the language model.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Dict, Optional
 
@@ -43,6 +44,26 @@ _TOOL_DOMAINS = {
 }
 
 
+@dataclass
+class OrchestratorResponse:
+    """Structured result for a single orchestrator turn."""
+
+    text: str
+    user_text: str
+    nlu_result: NLUResult
+    extras: Dict[str, Any]
+    tool_name: Optional[str]
+    tool_payload: Optional[Dict[str, Any]]
+    tool_result: Optional[Dict[str, Any]]
+    tool_success: Optional[bool]
+    resolution_status: str
+    fallback_triggered: bool
+    latency_ms: int
+    metadata: Optional[Dict[str, Any]]
+    review_reason: Optional[str]
+    response_summary: Optional[str]
+
+
 class Orchestrator:
     """Coordinates NLU, tool execution, and LLM routing."""
 
@@ -70,6 +91,12 @@ class Orchestrator:
         result = self._registry.run_tool(tool_name, payload)
         return result, self._format_tool_response(tool_name, result)
 
+    def run_tool(self, tool_name: str, payload: Dict[str, object]) -> Dict[str, object]:
+        """Execute a tool synchronously and return the raw result."""
+
+        result, _ = self._run_tool(tool_name, payload)
+        return result
+
     def _apply_tool_metadata(
         self,
         extras: Dict[str, Any],
@@ -94,6 +121,9 @@ class Orchestrator:
         return metadata
 
     def handle_message(self, message: str) -> str:
+        return self.handle_message_with_details(message).text
+
+    def handle_message_with_details(self, message: str) -> OrchestratorResponse:
         start = perf_counter()
 
         raw_message = message or ""
@@ -104,6 +134,7 @@ class Orchestrator:
         response_summary: Optional[str] = None
         tool_name: Optional[str] = None
         tool_payload: Optional[Dict[str, Any]] = None
+        tool_result: Optional[Dict[str, Any]] = None
         tool_success: Optional[bool] = None
         resolution_status = "unknown"
         fallback_triggered = False
@@ -124,10 +155,11 @@ class Orchestrator:
                 payload = self._nlu.build_payload(nlu_result, raw_message)
                 tool_payload = payload
                 tool_name = candidate_tool
-                extras["invocation_source"] = "nlu"
+                extras.setdefault("invocation_source", "nlu")
                 extras["resolved_tool"] = tool_name
                 try:
                     result, response_text = self._run_tool(tool_name, payload)
+                    tool_result = result
                     extras = self._apply_tool_metadata(extras, tool_name, result)
                     tool_success = True
                     resolution_status = "tool:nlu"
@@ -162,6 +194,7 @@ class Orchestrator:
                         extras["resolved_tool"] = tool_name
                         try:
                             result, response_text = self._run_tool(tool_name, payload)
+                            tool_result = result
                             extras = self._apply_tool_metadata(extras, tool_name, result)
                             tool_success = True
                             resolution_status = "tool:router"
@@ -205,7 +238,22 @@ class Orchestrator:
             review_reason,
         )
 
-        return response_text
+        return OrchestratorResponse(
+            text=response_text,
+            user_text=raw_message,
+            nlu_result=nlu_result,
+            extras=extras or {},
+            tool_name=tool_name,
+            tool_payload=tool_payload,
+            tool_result=tool_result,
+            tool_success=tool_success,
+            resolution_status=resolution_status,
+            fallback_triggered=fallback_triggered,
+            latency_ms=latency_ms,
+            metadata=metadata,
+            review_reason=review_reason,
+            response_summary=response_summary,
+        )
 
     def _intent_to_tool(self, intent: str) -> Optional[str]:
         mapping = {

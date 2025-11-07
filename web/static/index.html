@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tier-5 Web UI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Tier 5</p>
+          <h1>Web UI &amp; Admin Panel</h1>
+          <p class="subtitle">
+            Mirror the CLI chat flow, label prompts inline, and edit JSON-backed data stores without leaving your browser.
+          </p>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-button" class="button secondary">Refresh Data</button>
+          <a class="button ghost" href="/exports" target="_blank" rel="noreferrer">Open Exports</a>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <button class="nav-link active" data-target="front-page">Chat &amp; Data</button>
+        <button class="nav-link" data-target="training-page">Training</button>
+      </nav>
+
+      <div class="page-view active" id="front-page">
+        <section class="panel" id="chat-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Chat Console</h2>
+              <p>Every turn runs through the Tier-1 orchestrator.</p>
+            </div>
+            <span class="badge" id="chat-status">Idle</span>
+          </div>
+          <div class="chat-log" id="chat-log"></div>
+          <form id="chat-form" class="chat-form">
+            <input id="chat-input" type="text" placeholder="Type a prompt to hit the orchestrator…" autocomplete="off" />
+            <button type="submit" class="button primary">Send</button>
+          </form>
+        </section>
+
+        <section class="panel" id="data-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Data Stores</h2>
+              <p>Todos, kitchen tips, calendar events, and App Guide entries share the same tool-backed persistence.</p>
+            </div>
+            <button id="data-refresh" class="button ghost">Refresh Stores</button>
+          </div>
+
+          <div class="data-stack">
+            <div class="data-card" id="todos-panel">
+              <div class="data-card-header">
+                <h3>Todos</h3>
+              </div>
+              <table class="data-table tight">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Deadline</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <form id="todo-form" class="inline-form">
+              <input name="title" placeholder="New todo" required />
+              <input name="deadline" placeholder="Deadline (YYYY-MM-DD)" />
+              <button class="button primary" type="submit">Add Todo</button>
+            </form>
+          </div>
+
+          <div class="data-card" id="kitchen-panel">
+            <div class="data-card-header">
+              <h3>Kitchen Tips</h3>
+            </div>
+            <ul class="list" id="kitchen-list"></ul>
+            <form id="kitchen-form" class="inline-form">
+              <input name="title" placeholder="Tip title" required />
+              <input name="tags" placeholder="Tags (comma separated)" />
+              <input name="link" placeholder="Link" />
+              <textarea name="body" placeholder="Tip details"></textarea>
+              <button class="button primary" type="submit">Add Tip</button>
+            </form>
+          </div>
+
+          <div class="data-card" id="calendar-panel">
+            <div class="data-card-header">
+              <h3>Calendar</h3>
+            </div>
+            <table class="data-table tight">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <form id="calendar-form" class="inline-form">
+              <input name="title" placeholder="Event title" required />
+              <input name="start" placeholder="Start (ISO)" required />
+              <input name="end" placeholder="End (ISO)" />
+              <input name="location" placeholder="Location" />
+              <button class="button primary" type="submit">Add Event</button>
+            </form>
+          </div>
+
+            <div class="data-card" id="guide-panel">
+              <div class="data-card-header">
+                <h3>App Guide</h3>
+              </div>
+              <ul class="list" id="guide-list"></ul>
+              <form id="guide-form" class="inline-form">
+                <input name="section_id" placeholder="Section ID" required />
+                <input name="title" placeholder="Title" required />
+                <textarea name="content" placeholder="Content" required></textarea>
+                <button class="button primary" type="submit">Save Section</button>
+              </form>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="page-view" id="training-page">
+        <section class="stats" id="stats-cards">
+          <div class="stat-card">
+            <p class="label">Pending Prompts</p>
+            <p class="value" id="pending-count">0</p>
+            <p class="hint" id="pending-breakdown">–</p>
+          </div>
+          <div class="stat-card">
+            <p class="label">Labeled Prompts</p>
+            <p class="value" id="labeled-count">0</p>
+            <p class="hint">Persisted in labeled_prompts.jsonl</p>
+          </div>
+          <div class="stat-card">
+            <p class="label">Classifier Warnings</p>
+            <p class="value" id="classifier-count">0</p>
+            <p class="hint">reports/intent_classifier.json</p>
+          </div>
+        </section>
+
+        <section class="panel training-panel" id="pending-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Self-Learning Dashboard</h2>
+              <p>Pending prompts ready for reviewer labeling.</p>
+            </div>
+            <div class="subpanel-actions">
+              <button id="pending-refresh" class="button ghost">Refresh</button>
+            </div>
+          </div>
+          <table class="data-table" id="pending-table">
+            <thead>
+              <tr>
+                <th>Prompt</th>
+                <th>Parser Intent</th>
+                <th>Reason</th>
+                <th>Assign</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="export-row">
+            <button id="export-prompts" class="button secondary">Export latest prompts</button>
+            <div class="export-links" id="export-links"></div>
+          </div>
+        </section>
+
+        <section class="panel training-panel" id="classifier-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Classifier Log</h2>
+              <p>Recent classifier-sourced turns with drift signals.</p>
+            </div>
+            <div class="subpanel-actions">
+              <button id="classifier-refresh" class="button ghost">Refresh</button>
+            </div>
+          </div>
+          <table class="data-table" id="classifier-table">
+            <thead>
+              <tr>
+                <th>Text</th>
+                <th>Classifier</th>
+                <th>Reviewer</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="panel training-panel" id="labeled-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Labeled Prompts</h2>
+              <p>Ground-truth queue powering the classifier retraining job.</p>
+            </div>
+            <div class="subpanel-actions">
+              <button id="labeled-refresh" class="button ghost">Refresh</button>
+            </div>
+          </div>
+          <table class="data-table" id="labeled-table">
+            <thead>
+              <tr>
+                <th>Text</th>
+                <th>Parser</th>
+                <th>Reviewer</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="panel training-panel" id="import-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Upload labeled CSV/JSON</h2>
+              <p>Append reviewer annotations directly to labeled_prompts.jsonl.</p>
+            </div>
+          </div>
+          <form id="import-form" class="import-form">
+            <div class="import-controls">
+              <input type="file" name="file" required />
+              <select name="fmt">
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+              <button type="submit" class="button primary">Import Labels</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
