@@ -38,6 +38,10 @@ _DATE_TEXT_PATTERN = re.compile(
     r"(?P<day>\d{1,2})\s*(?:\.|)\s*(?P<month_name>[A-Za-zÆØÅæøå]+)\s+(?P<year>\d{2,4})",
     re.IGNORECASE,
 )
+_DATETIME_NUMERIC_PATTERN = re.compile(
+    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2,4})(?:\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?)?",
+    re.IGNORECASE,
+)
 
 
 def extract_quoted_strings(text: str) -> List[str]:
@@ -86,6 +90,27 @@ def parse_datetime_hint(text: str, default_time: Optional[time] = None) -> Optio
         return datetime.fromisoformat(text)
     except ValueError:
         pass
+
+    numeric_match = _DATETIME_NUMERIC_PATTERN.fullmatch(text)
+    if numeric_match:
+        day = int(numeric_match.group("day"))
+        month = int(numeric_match.group("month"))
+        year = int(numeric_match.group("year"))
+        if year < 100:
+            year += 2000
+        hour = default_time.hour
+        minute = default_time.minute
+        if numeric_match.group("hour") is not None:
+            try:
+                hour = int(numeric_match.group("hour"))
+                minute = int(numeric_match.group("minute") or 0)
+            except ValueError:
+                hour = default_time.hour
+                minute = default_time.minute
+        try:
+            return datetime(year, month, day, hour, minute)
+        except ValueError:
+            return None
 
     date_value = parse_date_hint(text)
     if date_value:

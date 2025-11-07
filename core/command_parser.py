@@ -13,10 +13,12 @@ from core.text_parsing import (
     extract_title_from_text,
     parse_date_hint,
     parse_datetime_hint,
+    extract_quoted_strings,
 )
 
 WEATHER_KEYWORDS = {"weather", "temperature", "forecast", "vejret", "vejrudsigten", "vejr"}
 NEWS_KEYWORDS = {"news", "headline", "headlines", "stories", "nyheder"}
+LANGUAGE_MARKERS = ("english", "engelsk")
 _RELATIVE_TIME_PATTERN = re.compile(
     r"\b(today|tonight|tomorrow|this\s(?:morning|afternoon|evening|weekend)|next\s(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|i\s?morgen|imorgen|i\s?aften|iaften|i\s?nat|inat|i\s?weekenden|i\s?weekend)\b",
     re.IGNORECASE,
@@ -72,6 +74,7 @@ _NEWS_TRIGGERS = [
     "any headlines on",
     "any headlines about",
 ]
+_TODO_DIRECTIVE_TOKENS = ("notes", "note", "deadline", "due", "reminder")
 
 
 @dataclass
@@ -105,6 +108,10 @@ def parse_command(message: str) -> Optional[CommandResult]:
         result = _parse_calendar_command(message, lowered)
         if result:
             return result
+    if "app guide" in lowered or "knowledge" in lowered:
+        result = _parse_app_guide_command(message, lowered)
+        if result:
+            return result
     return None
 
 
@@ -124,10 +131,41 @@ def _parse_weather_command(message: str) -> Optional[CommandResult]:
 
 def _parse_news_command(message: str) -> Optional[CommandResult]:
     payload: Dict[str, object] = {"message": message, "domain": "news"}
-    topic = _extract_news_topic(message)
+    cleaned_message, language = _strip_language_markers(message)
+    if language:
+        payload["language"] = language
+    topic = _extract_news_topic(cleaned_message)
     if topic:
         payload["topic"] = topic
     return CommandResult(tool="news", payload=payload, confidence=0.85)
+
+
+def _parse_app_guide_command(message: str, lowered: str) -> Optional[CommandResult]:
+    payload: Dict[str, object] = {"message": message, "domain": "knowledge"}
+    quotes = extract_quoted_strings(message)
+
+    if "list" in lowered:
+        payload["action"] = "list"
+    elif "delete" in lowered:
+        payload["action"] = "delete"
+        if quotes:
+            payload["section_id"] = quotes[0]
+    elif any(word in lowered for word in ("update", "create", "add", "upsert")):
+        payload["action"] = "upsert"
+        if quotes:
+            payload["section_id"] = quotes[0]
+        if len(quotes) > 1:
+            payload["title"] = quotes[1]
+        if len(quotes) > 2:
+            payload["content"] = quotes[2]
+    elif "get" in lowered or ("section" in lowered and "list" not in lowered):
+        payload["action"] = "get"
+        if quotes:
+            payload["section_id"] = quotes[0]
+    else:
+        payload["action"] = "list"
+
+    return CommandResult(tool="app_guide", payload=payload)
 
 
 def _parse_todo_command(message: str, lowered: str) -> Optional[CommandResult]:
@@ -142,11 +180,42 @@ def _parse_todo_command(message: str, lowered: str) -> Optional[CommandResult]:
         action = "create"
 
     payload: Dict[str, object] = {"action": action, "message": message, "domain": "todo"}
-    title = extract_title_from_text(message)
-    if title:
-        if action in {"update", "delete"}:
+    cleaned_for_title = _strip_command_directives(message)
+
+    if action in {"update", "delete"}:
+        trimmed_message = re.sub(
+            r"^(?:update|delete|remove|complete)\s+todo\s+",
+            "",
+            message,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        title = extract_title_from_text(trimmed_message)
+        if title:
+            title = re.split(r"\s+to\b", title, 1)[0].strip(' "\'')
+        if not title:
+            title = _extract_after_keywords(
+                trimmed_message,
+                ["update todo", "delete todo", "remove todo", "complete todo"],
+                terminators=[" status", " notes", " note", " deadline", " due", "."],
+            )
+            if title:
+                title = title.strip('" ').strip()
+        if not title:
+            match = re.search(r"update todo\s+(.+?)\s+to\b", message, re.IGNORECASE)
+            if match:
+                title = match.group(1).strip(' "\'')
+        if not title and trimmed_message:
+            normalized = re.split(r"\s+to\b", trimmed_message, 1)[0].strip(' "\'')
+            if normalized:
+                title = normalized
+        if title:
             payload["target_title"] = title
-        else:
+    else:
+        title = extract_title_from_text(cleaned_for_title)
+        if not title and cleaned_for_title:
+            title = cleaned_for_title.strip()
+        if title:
             payload["title"] = title
 
     notes = extract_notes_from_text(message)
@@ -280,7 +349,7 @@ def _extract_after_keywords(message: str, keywords: List[str], terminators: Opti
         for separator in (",", ";", "."):
             if separator in segment:
                 segment = segment.split(separator)[0]
-        return segment.strip()
+        return segment.strip().strip(' "\'')
     return None
 
 
@@ -386,6 +455,16 @@ def _remove_trailing_phrases(value: str) -> str:
     return value
 
 
+def _strip_command_directives(message: str) -> str:
+    lowered = message.lower()
+    cut_index = len(message)
+    for token in _TODO_DIRECTIVE_TOKENS:
+        idx = lowered.find(token)
+        if idx != -1:
+            cut_index = min(cut_index, idx)
+    return message[:cut_index].strip()
+
+
 def _extract_time_hint(message: str) -> Optional[Dict[str, object]]:
     lowered = message.lower()
     rel_match = _RELATIVE_TIME_PATTERN.search(lowered)
@@ -439,6 +518,18 @@ def _parse_time_components(time_value: str, ampm: Optional[str]) -> tuple[Option
     hour = hour if 0 <= hour <= 23 else None
     minute = minute if 0 <= minute <= 59 else None
     return hour, minute
+
+
+def _strip_language_markers(message: str) -> tuple[str, Optional[str]]:
+    lowered = message.lower()
+    language: Optional[str] = None
+    cleaned = message
+    for marker in LANGUAGE_MARKERS:
+        if marker in lowered:
+            language = "en"
+            pattern = re.compile(re.escape(marker), re.IGNORECASE)
+            cleaned = pattern.sub("", cleaned)
+    return cleaned.strip(), language
 
 
 def _extract_news_topic(message: str) -> str:

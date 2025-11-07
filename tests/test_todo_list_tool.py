@@ -153,3 +153,4 @@ def test_todo_update_and_delete_by_title(tmp_path: Path, monkeypatch: pytest.Mon
 
     deleted = todo_list.run({"action": "delete", "target_title": "By Title"})
     assert deleted["deleted"] is True
+

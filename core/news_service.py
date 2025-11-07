@@ -48,7 +48,7 @@ def _http_get(url: str, **kwargs) -> requests.Response:
 # ---------------------------------------------------------------------------
 # News search helpers (Google News RSS + NewsAPI)
 # ---------------------------------------------------------------------------
-def _looks_danish(text: str) -> bool:
+def looks_danish(text: str) -> bool:
     candidate = (text or "").lower()
     if any(ch in candidate for ch in "æøå"):
         return True
@@ -158,33 +158,91 @@ def _newsapi_search(query: str, *, limit: int, days: int, language: Optional[str
     return results
 
 
-def topic_news_search(query: str, *, limit: Optional[int] = None) -> List[Dict[str, str]]:
-    """Return recent headlines for ``query`` with Danish-first heuristics."""
+def topic_news_search(
+    query: str,
+    *,
+    limit: Optional[int] = None,
+    language_override: Optional[str] = None,
+    allow_global_fallback: bool = True,
+) -> List[Dict[str, str]]:
+    """Return recent headlines for ``query`` with optional language overrides."""
 
     limit = int(limit or _NEWS_SEARCH_LIMIT)
     global_days = _NEWS_SEARCH_DAYS
     local_days = _NEWS_LOCAL_DAYS
 
-    if _looks_danish(query):
-        items = _google_news_rss(query, lang="da", country="DK", limit=limit, days=local_days)
+    attempts: List[Dict[str, Any]] = []
+
+    if language_override == "en":
+        attempts = [
+            {"type": "newsapi", "language": "en", "days": global_days},
+            {"type": "rss", "lang": "en", "country": "US", "days": global_days},
+        ]
+    elif language_override == "da":
+        attempts = [
+            {"type": "rss", "lang": "da", "country": "DK", "days": local_days},
+            {"type": "newsapi", "language": "da", "days": local_days},
+        ]
+    else:
+        if looks_danish(query):
+            attempts = [
+                {"type": "rss", "lang": "da", "country": "DK", "days": local_days},
+                {"type": "newsapi", "language": "da", "days": local_days},
+            ]
+        else:
+            attempts = [
+                {"type": "newsapi", "language": "en", "days": global_days},
+                {"type": "rss", "lang": "en", "country": "US", "days": global_days},
+            ]
+
+    for attempt in attempts:
+        if attempt["type"] == "newsapi":
+            items = _newsapi_search(
+                query,
+                limit=limit,
+                days=attempt["days"],
+                language=attempt["language"],
+            )
+        else:
+            items = _google_news_rss(
+                query,
+                lang=attempt["lang"],
+                country=attempt["country"],
+                limit=limit,
+                days=attempt["days"],
+            )
         if items:
             return _filter_allowed_sources(items)
 
-        items = _newsapi_search(query, limit=limit, days=local_days, language="da")
-        if items:
-            return _filter_allowed_sources(items)
+    if (
+        allow_global_fallback
+        and language_override is None
+        and looks_danish(query)
+    ):
+        fallback_chain = [
+            {"type": "newsapi", "language": "en", "days": global_days},
+            {"type": "rss", "lang": "en", "country": "US", "days": global_days},
+        ]
+        for attempt in fallback_chain:
+            if attempt["type"] == "newsapi":
+                items = _newsapi_search(
+                    query,
+                    limit=limit,
+                    days=attempt["days"],
+                    language=attempt["language"],
+                )
+            else:
+                items = _google_news_rss(
+                    query,
+                    lang=attempt["lang"],
+                    country=attempt["country"],
+                    limit=limit,
+                    days=attempt["days"],
+                )
+            if items:
+                return _filter_allowed_sources(items)
 
-        return _filter_allowed_sources(
-            _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
-        )
-
-    items = _newsapi_search(query, limit=limit, days=global_days, language="en")
-    if items:
-        return _filter_allowed_sources(items)
-
-    return _filter_allowed_sources(
-        _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
-    )
+    return []
 
 
 def news_search_limit() -> int:

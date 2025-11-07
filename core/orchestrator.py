@@ -20,6 +20,7 @@ from tools.calendar_edit import format_calendar_response
 from tools.kitchen_tips import format_kitchen_tips_response
 from tools.news import format_news_list
 from tools.todo_list import format_todo_response
+from tools.app_guide_tool import format_app_guide_response
 from tools.weather import format_weather_response
 
 
@@ -29,6 +30,7 @@ _FORMATTERS = {
     "todo_list": format_todo_response,
     "kitchen_tips": format_kitchen_tips_response,
     "calendar_edit": format_calendar_response,
+    "app_guide": format_app_guide_response,
 }
 
 _TOOL_DOMAINS = {
@@ -37,6 +39,7 @@ _TOOL_DOMAINS = {
     "todo_list": "todo",
     "kitchen_tips": "kitchen",
     "calendar_edit": "calendar",
+    "app_guide": "knowledge",
 }
 
 
