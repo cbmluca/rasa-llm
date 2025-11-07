@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.json_storage import atomic_write_json, read_json
+from core.text_parsing import (
+    extract_notes_from_text,
+    extract_title_from_text,
+    parse_date_hint,
+)
 
 _DEFAULT_STORAGE_PATH = Path("data_pipeline/todos.json")
 _STATUS_MAP = {
@@ -57,13 +62,8 @@ _DANISH_MONTHS = {
     "november": 11,
     "december": 12,
 }
-_DATE_PATTERN = re.compile(
-    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2,4})"
-)
-_DATE_TEXT_PATTERN = re.compile(
-    r"(?P<day>\d{1,2})\s*(?:\.|)\s*(?P<month_name>[A-Za-zÆØÅæøå]+)\s+(?P<year>\d{2,4})",
-    re.IGNORECASE,
-)
+_DATE_PATTERN = re.compile(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}")
+_DATE_TEXT_PATTERN = re.compile(r"\d{1,2}\s*[A-Za-zÆØÅæøå]+\s+\d{2,4}", re.IGNORECASE)
 
 
 @dataclass
@@ -101,6 +101,10 @@ class TodoStore:
 
     def create_todo(self, title: str, notes: Optional[List[str]], status: str, deadline: Optional[str]) -> Dict[str, Any]:
         now = _utc_timestamp()
+        entries = self._load_items()
+        normalized_title = title.strip().lower()
+        if any(entry.title.strip().lower() == normalized_title for entry in entries):
+            raise ValueError("duplicate_title")
         item = TodoItem(
             id=uuid.uuid4().hex,
             title=title,
@@ -110,7 +114,6 @@ class TodoStore:
             notes=notes,
             deadline=deadline,
         )
-        entries = self._load_items()
         entries.append(item)
         self._write_items(entries)
         return item.to_dict()
@@ -170,6 +173,13 @@ class TodoStore:
         self._write_items(filtered)
         return True
 
+    def find_entry_by_title(self, title: str) -> Optional[TodoItem]:
+        title_norm = title.strip().lower()
+        for entry in self._load_items():
+            if entry.title.strip().lower() == title_norm:
+                return entry
+        return None
+
     def _load_items(self) -> List[TodoItem]:
         payload = read_json(self._storage_path, {"todos": []})
         raw_items = payload.get("todos", [])
@@ -221,7 +231,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         title = _extract_title(payload)
         if not title:
             return _error_response("create", "missing_title", "Todo title is required.")
-        notes = _normalize_notes(payload.get("notes"))
+        notes = _normalize_notes(payload.get("notes")) or _extract_notes_from_message(payload)
         try:
             status = _normalize_status(payload.get("status"))
         except ValueError as exc:
@@ -234,17 +244,35 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         message_deadline = _extract_deadline_from_message(payload) if not deadline_value else None
         deadline_iso = deadline_value or message_deadline
 
-        todo = store.create_todo(title=title, notes=notes, status=status, deadline=deadline_iso)
+        try:
+            todo = store.create_todo(title=title, notes=notes, status=status, deadline=deadline_iso)
+        except ValueError as exc:
+            if str(exc) == "duplicate_title":
+                return _error_response("create", "duplicate_title", f"Todo '{title}' already exists.")
+            raise
         _augment_deadline_metadata(todo)
         return {"type": "todo_list", "domain": "todo", "action": "create", "todo": todo}
 
     if action == "update":
         todo_id = str(payload.get("id", "")).strip()
+        target_title = payload.get("target_title")
+        if not todo_id and target_title:
+            entry = store.find_entry_by_title(str(target_title))
+            if not entry:
+                return _error_response("update", "not_found", f"Todo '{target_title}' was not found.")
+            todo_id = entry.id
+        if not todo_id and isinstance(payload.get("message"), str):
+            implicit_title = _extract_title_from_message(payload["message"])
+            if implicit_title:
+                entry = store.find_entry_by_title(implicit_title)
+                if entry:
+                    todo_id = entry.id
         if not todo_id:
-            return _error_response("update", "missing_id", "Todo ID is required to update an item.")
+            return _error_response("update", "missing_id", "Todo ID or title is required to update an item.")
 
-        title = payload.get("title")
-        title_value = str(title).strip() if title is not None else None
+        title_value = None
+        if "new_title" in payload:
+            title_value = str(payload.get("new_title") or "").strip()
 
         status_value: Optional[str]
         if "status" in payload:
@@ -256,7 +284,12 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             status_value = None
 
         notes_field_present = "notes" in payload
-        notes_value = _normalize_notes(payload.get("notes")) if notes_field_present else None
+        if notes_field_present:
+            notes_value = _normalize_notes(payload.get("notes"))
+        else:
+            notes_value = _extract_notes_from_message(payload)
+            if notes_value:
+                notes_field_present = True
 
         try:
             deadline_field_value, field_provided, deadline_cleared = _extract_deadline_from_fields(payload)
@@ -290,8 +323,13 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if action == "delete":
         todo_id = str(payload.get("id", "")).strip()
+        target_title = payload.get("target_title") or payload.get("title")
+        if not todo_id and target_title:
+            entry = store.find_entry_by_title(str(target_title))
+            if entry:
+                todo_id = entry.id
         if not todo_id:
-            return _error_response("delete", "missing_id", "Todo ID is required to delete an item.")
+            return _error_response("delete", "missing_id", "Todo ID or title is required to delete an item.")
         removed = store.delete_todo(todo_id)
         if not removed:
             return _error_response("delete", "not_found", f"Todo '{todo_id}' was not found.")
@@ -304,7 +342,7 @@ def format_todo_response(result: Dict[str, Any]) -> str:
     """Render a human-friendly summary for todo operations plus raw payload."""
 
     if "error" in result:
-        return _with_raw_output(result.get("message", "Todo action failed."), result)
+        return _with_raw_output(result.get("message", "Todo action failed."), result, include_raw=False)
 
     action = result.get("action")
     if action == "list":
@@ -388,7 +426,7 @@ def _normalize_action(raw_action: Any) -> str:
 
 
 def _extract_title(payload: Dict[str, Any]) -> str:
-    candidates = ("title", "todo", "item", "text", "message")
+    candidates = ("title", "todo", "item", "text")
     for key in candidates:
         if key not in payload:
             continue
@@ -398,6 +436,12 @@ def _extract_title(payload: Dict[str, Any]) -> str:
         text = str(value).strip()
         if text:
             return text
+
+    message = payload.get("message")
+    if isinstance(message, str):
+        title = _extract_title_from_message(message)
+        if title:
+            return title
     return ""
 
 
@@ -412,10 +456,10 @@ def _extract_deadline_from_fields(payload: Dict[str, Any]) -> Tuple[Optional[str
         text = str(raw_value).strip()
         if not text:
             return None, provided, True
-        parsed = _parse_danish_date(text)
+        parsed = parse_date_hint(text)
         if not parsed:
             raise ValueError(f"Could not parse deadline '{text}'. Use Danish date formats like 1/7/2026.")
-        return parsed, provided, False
+        return parsed.isoformat(), provided, False
     return None, False, False
 
 
@@ -423,68 +467,53 @@ def _extract_deadline_from_message(payload: Dict[str, Any]) -> Optional[str]:
     message = payload.get("message")
     if not isinstance(message, str):
         return None
-    match = _DATE_PATTERN.search(message)
-    if match:
-        parsed = _parse_numeric_date(match)
+    for pattern in (_DATE_PATTERN, _DATE_TEXT_PATTERN):
+        for match in pattern.finditer(message):
+            parsed = parse_date_hint(match.group(0))
+            if parsed:
+                return parsed.isoformat()
+    for token in re.split(r"\s+", message):
+        parsed = parse_date_hint(token)
         if parsed:
-            return parsed
-    match = _DATE_TEXT_PATTERN.search(message)
-    if match:
-        parsed = _parse_textual_date(match)
-        if parsed:
-            return parsed
+            return parsed.isoformat()
     return None
 
 
-def _parse_danish_date(text: str) -> Optional[str]:
-    text = text.strip()
-    if not text:
+def _extract_notes_from_message(payload: Dict[str, Any]) -> Optional[List[str]]:
+    message = payload.get("message")
+    if not isinstance(message, str):
         return None
-    numeric_match = _DATE_PATTERN.fullmatch(text)
-    if numeric_match:
-        return _parse_numeric_date(numeric_match)
-    textual_match = _DATE_TEXT_PATTERN.fullmatch(text)
-    if textual_match:
-        return _parse_textual_date(textual_match)
-    # allow ISO input directly
-    try:
-        return datetime.fromisoformat(text).date().isoformat()
-    except ValueError:
-        return None
+    notes = extract_notes_from_text(message)
+    return notes or None
 
 
-def _parse_numeric_date(match: re.Match[str]) -> Optional[str]:
-    day = int(match.group("day"))
-    month = int(match.group("month"))
-    year = int(match.group("year"))
-    if year < 100:
-        year += 2000
-    try:
-        return date(year, month, day).isoformat()
-    except ValueError:
-        return None
+def _extract_title_from_message(message: str) -> Optional[str]:
+    title = extract_title_from_text(message)
+    if title:
+        return _clean_command_prefix(title)
+    return None
 
 
-def _parse_textual_date(match: re.Match[str]) -> Optional[str]:
-    day = int(match.group("day"))
-    month_name = match.group("month_name").lower()
-    year = int(match.group("year"))
-    if year < 100:
-        year += 2000
-    month = _DANISH_MONTHS.get(month_name)
-    if not month:
-        return None
-    try:
-        return date(year, month, day).isoformat()
-    except ValueError:
-        return None
+def _clean_command_prefix(text: str) -> str:
+    lowered = text.lower()
+    prefixes = [
+        "remember",
+        "add todo",
+        "todo",
+        "add task",
+        "create todo",
+    ]
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return text[len(prefix) :].strip(" :,-")
+    return text.strip()
 
 
 def _normalize_deadline(deadline: Optional[str]) -> Optional[str]:
     if not deadline:
         return None
-    parsed = _parse_danish_date(deadline)
-    return parsed
+    parsed = parse_date_hint(deadline)
+    return parsed.isoformat() if parsed else None
 
 
 def _deadline_to_date(deadline: Optional[str]) -> Optional[date]:
@@ -516,7 +545,9 @@ def _sort_key_for_entry(entry: TodoItem) -> Tuple[int, date, str]:
     return (has_deadline, deadline_date, entry.title.lower())
 
 
-def _with_raw_output(message: str, payload: Dict[str, Any]) -> str:
+def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = True) -> str:
+    if not include_raw:
+        return message
     raw = json.dumps(payload, indent=2, ensure_ascii=False)
     return f"{message}\nRaw:\n{raw}"
 

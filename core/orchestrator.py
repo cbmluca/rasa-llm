@@ -106,29 +106,40 @@ class Orchestrator:
         fallback_triggered = False
         metadata: Dict[str, Any] | None = None
         extras: Dict[str, Any] = self._nlu.build_metadata(nlu_result)
+        extras["resolved_intent"] = nlu_result.intent
         review_reason: Optional[str] = None
+
+        router_needed = False
 
         if not raw_message.strip():
             response_text = "Please enter a message to get started."
             resolution_status = "input_error"
             extras["invocation_source"] = "input_validation"
-        elif is_confident and nlu_result.intent in {"ask_weather", "get_news"}:
-            payload = self._nlu.build_payload(nlu_result, raw_message)
-            tool_payload = payload
-            tool_name = "weather" if nlu_result.intent == "ask_weather" else "news"
-            extras["invocation_source"] = "nlu"
-            try:
-                result, response_text = self._run_tool(tool_name, payload)
-                extras = self._apply_tool_metadata(extras, tool_name, result)
-                tool_success = True
-                resolution_status = "tool:nlu"
-            except Exception as exc:  # pragma: no cover - defensive guard
-                tool_success = False
-                resolution_status = "tool_error"
-                response_text = "The selected tool failed to execute."
-                metadata = {"error": repr(exc)}
-                review_reason = "tool_error"
+        elif is_confident:
+            candidate_tool = self._intent_to_tool(nlu_result.intent)
+            if candidate_tool:
+                payload = self._nlu.build_payload(nlu_result, raw_message)
+                tool_payload = payload
+                tool_name = candidate_tool
+                extras["invocation_source"] = "nlu"
+                extras["resolved_tool"] = tool_name
+                try:
+                    result, response_text = self._run_tool(tool_name, payload)
+                    extras = self._apply_tool_metadata(extras, tool_name, result)
+                    tool_success = True
+                    resolution_status = "tool:nlu"
+                except Exception as exc:
+                    tool_success = False
+                    resolution_status = "tool_error"
+                    response_text = "The selected tool failed to execute."
+                    metadata = {"error": repr(exc)}
+                    review_reason = "tool_error"
+            else:
+                router_needed = True
         else:
+            router_needed = True
+
+        if router_needed:
             decision = self._router.route(raw_message)
             if isinstance(decision, dict) and decision.get("type") == "tool":
                 tool_name = str(decision.get("name", "")).strip()
@@ -145,6 +156,7 @@ class Orchestrator:
                     else:
                         tool_payload = payload
                         extras["invocation_source"] = "router"
+                        extras["resolved_tool"] = tool_name
                         try:
                             result, response_text = self._run_tool(tool_name, payload)
                             extras = self._apply_tool_metadata(extras, tool_name, result)
@@ -191,6 +203,20 @@ class Orchestrator:
         )
 
         return response_text
+
+    def _intent_to_tool(self, intent: str) -> Optional[str]:
+        mapping = {
+            "ask_weather": "weather",
+            "get_news": "news",
+            "weather": "weather",
+            "news": "news",
+        }
+        if intent in mapping:
+            return mapping[intent]
+        available = self._registry.available_tools()
+        if intent in available:
+            return intent
+        return None
 
     def _emit_logs(
         self,

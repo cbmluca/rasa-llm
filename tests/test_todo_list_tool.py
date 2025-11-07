@@ -111,3 +111,45 @@ def test_todo_notes_list_and_clearing(tmp_path: Path, monkeypatch: pytest.Monkey
 
     cleared = todo_list.run({"action": "update", "id": todo_id, "notes": ""})
     assert "notes" not in cleared["todo"]
+
+
+def test_todo_parse_title_and_notes_from_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    message = 'add todo "Renew SMK card" deadline "1/7/2026" notes "Check calendar" and "book omvisninger"'
+    created = todo_list.run({"action": "add", "message": message})
+    todo = created["todo"]
+    assert todo["title"] == "Renew SMK card"
+    assert todo["deadline"] == "2026-07-01"
+    assert todo["notes"] == ["Check calendar", "book omvisninger"]
+
+
+def test_todo_error_response_has_no_raw() -> None:
+    response = todo_list.format_todo_response(
+        {"type": "todo_list", "domain": "todo", "action": "create", "error": "missing_title", "message": "Todo title is required."}
+    )
+    assert "Raw:" not in response
+
+
+def test_todo_duplicate_titles_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    todo_list.run({"action": "create", "title": "Duplicate"})
+    duplicate = todo_list.run({"action": "create", "title": "Duplicate"})
+    assert duplicate["error"] == "duplicate_title"
+
+
+def test_todo_update_and_delete_by_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    created = todo_list.run({"action": "create", "title": "By Title"})
+    assert created["action"] == "create"
+
+    updated = todo_list.run({"action": "update", "target_title": "By Title", "status": "completed"})
+    assert updated["todo"]["status"] == "completed"
+
+    deleted = todo_list.run({"action": "delete", "target_title": "By Title"})
+    assert deleted["deleted"] is True

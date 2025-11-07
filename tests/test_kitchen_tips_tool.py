@@ -52,7 +52,6 @@ def test_kitchen_tips_validation(tmp_path: Path, monkeypatch) -> None:
     search = kitchen_tips.run({"action": "search"})
     assert search["error"] == "missing_query"
 
-
 def test_kitchen_tips_formatter_includes_raw(tmp_path: Path, monkeypatch) -> None:
     storage_path = tmp_path / "kitchen_tips.json"
     monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
@@ -61,3 +60,21 @@ def test_kitchen_tips_formatter_includes_raw(tmp_path: Path, monkeypatch) -> Non
     result = kitchen_tips.run({"action": "list"})
     formatted = kitchen_tips.format_kitchen_tips_response(result)
     assert "Raw:" in formatted
+
+
+def test_kitchen_tips_create(tmp_path: Path, monkeypatch) -> None:
+    storage_path = tmp_path / "kitchen_tips.json"
+    monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
+    storage_path.write_text(json.dumps({"tips": []}), encoding="utf-8")
+
+    created = kitchen_tips.run(
+        {
+            "action": "create",
+            "title": "Sear steaks hot",
+            "body": "Sear at high heat then finish low.",
+            "tags": ["meat", "steak"],
+            "link": "https://example.com/steak",
+        }
+    )
+    assert created["action"] == "create"
+    assert created["tip"]["title"] == "Sear steaks hot"

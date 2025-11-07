@@ -4,17 +4,33 @@
       "id": "dc56d9d190f84f00a9cfa149e9833bd1",
       "title": "Tier X - apps integration",
       "status": "pending",
-      "notes": "integrate calendar events with iCal, SHC app, Min L\u00e6ge etc",
       "created_at": "2025-11-06T22:01:13.842217+00:00",
-      "updated_at": "2025-11-06T22:01:13.842217+00:00"
+      "updated_at": "2025-11-06T22:01:13.842217+00:00",
+      "notes": [
+        "integrate calendar events with iCal, SHC app, Min L\u00e6ge etc"
+      ]
     },
     {
       "id": "c7c5334d58b248fca043d7e038204251",
       "title": "Tier X - UI",
-      "status": "pending",
-      "notes": "",
+      "status": "completed",
       "created_at": "2025-11-07T07:25:25.697006+00:00",
-      "updated_at": "2025-11-07T07:25:25.697006+00:00"
+      "updated_at": "2025-11-07T17:26:47.284569+00:00",
+      "notes": [
+        "Tier X - UI"
+      ]
+    },
+    {
+      "id": "852d311ce45340d5b5cf8ba59bd90e26",
+      "title": "Check cellar",
+      "status": "pending",
+      "created_at": "2025-11-07T17:20:29.168609+00:00",
+      "updated_at": "2025-11-07T17:20:29.168609+00:00",
+      "notes": [
+        "Check cellar",
+        "Pick from list"
+      ],
+      "deadline": "2025-11-08"
     }
   ]
 }

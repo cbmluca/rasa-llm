@@ -168,22 +168,36 @@ def topic_news_search(query: str, *, limit: Optional[int] = None) -> List[Dict[s
     if _looks_danish(query):
         items = _google_news_rss(query, lang="da", country="DK", limit=limit, days=local_days)
         if items:
-            return items
+            return _filter_allowed_sources(items)
 
         items = _newsapi_search(query, limit=limit, days=local_days, language="da")
         if items:
-            return items
+            return _filter_allowed_sources(items)
 
-        return _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
+        return _filter_allowed_sources(
+            _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
+        )
 
     items = _newsapi_search(query, limit=limit, days=global_days, language="en")
     if items:
-        return items
+        return _filter_allowed_sources(items)
 
-    return _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
+    return _filter_allowed_sources(
+        _google_news_rss(query, lang="en", country="US", limit=limit, days=global_days)
+    )
 
 
 def news_search_limit() -> int:
     """Expose the default search limit for callers that want a fallback."""
 
     return _NEWS_SEARCH_LIMIT
+
+
+def _filter_allowed_sources(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    allowed: List[Dict[str, str]] = []
+    for item in items:
+        url = (item.get("url") or "").lower()
+        if ".no" in url:
+            continue
+        allowed.append(item)
+    return allowed

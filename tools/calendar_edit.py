@@ -182,6 +182,13 @@ class CalendarStore:
         payload = {"events": [event.to_dict() for event in events]}
         atomic_write_json(self._storage_path, payload)
 
+    def find_event_by_title(self, title: str) -> Optional[CalendarEvent]:
+        normalized = title.strip().lower()
+        for event in self._load_events():
+            if event.title.strip().lower() == normalized:
+                return event
+        return None
+
 
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Entry point for calendar operations."""
@@ -222,10 +229,23 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     if action == "update":
         event_id = str(payload.get("id", "")).strip()
         if not event_id:
-            return _error_response("update", "missing_id", "Event ID is required to update an entry.")
+            lookup_title = payload.get("target_title")
+            if not lookup_title:
+                lookup_title = payload.get("title")
+            if lookup_title:
+                entry = store.find_event_by_title(str(lookup_title))
+                if entry:
+                    event_id = entry.id
+        if not event_id:
+            return _error_response("update", "missing_id", "Event ID or title is required to update an entry.")
 
-        title = payload.get("title")
-        title_value = str(title).strip() if title is not None else None
+        title_value = None
+        if "new_title" in payload:
+            title_value = str(payload.get("new_title") or "").strip()
+        elif "title" in payload and payload.get("title") is not None and payload.get("target_title") is None:
+            title_candidate = str(payload.get("title")).strip()
+            if title_candidate:
+                title_value = title_candidate
 
         start_dt: Optional[datetime]
         if "start" in payload:
@@ -293,7 +313,13 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     if action == "delete":
         event_id = str(payload.get("id", "")).strip()
         if not event_id:
-            return _error_response("delete", "missing_id", "Event ID is required to delete an entry.")
+            lookup_title = payload.get("target_title") or payload.get("title")
+            if lookup_title:
+                entry = store.find_event_by_title(str(lookup_title))
+                if entry:
+                    event_id = entry.id
+        if not event_id:
+            return _error_response("delete", "missing_id", "Event ID or title is required to delete an entry.")
         removed = store.delete_event(event_id)
         if not removed:
             return _error_response("delete", "not_found", f"Event '{event_id}' was not found.")
@@ -306,7 +332,7 @@ def format_calendar_response(result: Dict[str, Any]) -> str:
     """Render a short description of calendar operations."""
 
     if "error" in result:
-        return _with_raw_output(result.get("message", "Calendar action failed."), result)
+        return _with_raw_output(result.get("message", "Calendar action failed."), result, include_raw=False)
 
     action = result.get("action")
     if action == "list":
@@ -367,7 +393,9 @@ def _error_response(action: str, code: str, message: str) -> Dict[str, Any]:
     }
 
 
-def _with_raw_output(message: str, payload: Dict[str, Any]) -> str:
+def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = True) -> str:
+    if not include_raw:
+        return message
     return f"{message}\nRaw:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
 
 

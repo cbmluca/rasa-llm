@@ -24,7 +24,7 @@ def test_learning_logger_writes_jsonl_records(tmp_path):
 
     turn = TurnRecord.new(
         user_text="How is the weather?",
-        intent="ask_weather",
+        intent="weather",
         confidence=0.8,
         entities={"city": "Copenhagen"},
         tool_name="weather",
