@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, time as dt_time
 import requests
 
+_DEFAULT_CITY = "Copenhagen"
+
 # --- External API helper functions -----------------------------------------
 def geocode_city(name: str) -> Optional[Dict[str, Any]]:
     if not name:
@@ -66,11 +68,10 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
     city = (payload.get("city") or payload.get("location") or "").strip()
+    default_note = None
     if not city:
-        return {
-            "error": "missing_city",
-            "message": "I need a city or location to look up the weather.",
-        }
+        city = _DEFAULT_CITY
+        default_note = f"No city provided; defaulting to {city}."
 
     loc = geocode_city(city)
     if not loc:
@@ -89,6 +90,9 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         forecast_entry = None
 
     if forecast_entry:
+        notes = []
+        if default_note:
+            notes.append(default_note)
         return {
             "type": "weather",
             "city": loc["name"],
@@ -96,15 +100,19 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "weather_code": forecast_entry.get("weather_code"),
             "timestamp": forecast_entry.get("time"),
             "mode": "forecast",
+            "note": " ".join(notes) if notes else None,
         }
 
     wx = get_current_weather(loc["lat"], loc["lon"])
     temp = wx.get("temperature_2m")
     code = wx.get("weather_code")
 
-    note = None
+    notes: List[str] = []
+    if default_note:
+        notes.append(default_note)
     if target_dt and not forecast_entry:
-        note = "Requested time is outside the available forecast; showing current conditions."
+        notes.append("Requested time is outside the available forecast; showing current conditions.")
+    note = " ".join(notes) if notes else None
 
     return {
         "type": "weather",

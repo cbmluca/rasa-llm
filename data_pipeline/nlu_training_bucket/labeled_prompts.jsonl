@@ -21,3 +21,6 @@
 {"timestamp": "2025-11-07T21:52:46.630874+00:00", "text": "calendar update Standup link \"\" location \"Remote\"", "parser_intent": "nlu_fallback", "reviewer_intent": "calendar_edit"}
 {"timestamp": "2025-11-07T21:52:46.630880+00:00", "text": "calendar list", "parser_intent": "nlu_fallback", "reviewer_intent": "calendar_edit"}
 {"timestamp": "2025-11-07T21:52:46.630885+00:00", "text": "list tods", "parser_intent": "nlu_fallback", "reviewer_intent": "todo_list"}
+{"timestamp": "2025-11-08T10:16:27.916686+00:00", "text": "Complete the task about updating the documentation.", "parser_intent": "nlu_fallback", "reviewer_intent": "todo_list"}
+{"timestamp": "2025-11-08T10:18:34.143119+00:00", "text": "Complete the task about Wine cellar", "parser_intent": "nlu_fallback", "reviewer_intent": "todo_list"}
+{"timestamp": "2025-11-08T10:22:17.911973+00:00", "text": "Complete the task to Check cellar", "parser_intent": "nlu_fallback", "reviewer_intent": "todo_list"}

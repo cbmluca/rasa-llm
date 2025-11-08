@@ -157,6 +157,19 @@
               <button id="pending-refresh" class="button ghost">Refresh</button>
             </div>
           </div>
+          <div class="pagination-controls">
+            <button id="pending-prev" class="button ghost">Previous</button>
+            <span class="page-indicator">Page <span id="pending-page">1</span></span>
+            <button id="pending-next" class="button ghost">Next</button>
+            <label class="limit-picker">
+              Rows
+              <select id="pending-limit">
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+            </label>
+          </div>
           <table class="data-table" id="pending-table">
             <thead>
               <tr>
@@ -213,7 +226,7 @@
                 <th>Text</th>
                 <th>Parser</th>
                 <th>Reviewer</th>
-                <th>Timestamp</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody></tbody>

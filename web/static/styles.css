@@ -1,13 +1,13 @@
 :root {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   line-height: 1.4;
-  background-color: #0b1220;
-  color: #f5f7fb;
-  --panel: rgba(15, 23, 42, 0.85);
-  --border: rgba(148, 163, 184, 0.2);
-  --accent: #7c6dff;
-  --accent-bg: rgba(124, 109, 255, 0.15);
-  --ghost: rgba(148, 163, 184, 0.2);
+  background-color: #0f1115;
+  color: #e5e7ec;
+  --panel: #161b22;
+  --border: rgba(255, 255, 255, 0.08);
+  --accent: #4b80ff;
+  --accent-bg: rgba(75, 128, 255, 0.15);
+  --ghost: rgba(255, 255, 255, 0.12);
 }
 
 * {
@@ -17,7 +17,7 @@
 body {
   margin: 0;
   padding: 0;
-  background: radial-gradient(circle at top, rgba(124, 109, 255, 0.25), rgba(15, 23, 42, 0.95));
+  background: linear-gradient(120deg, #0f1115 0%, #0c0d10 65%, #08090c 100%);
   min-height: 100vh;
 }
 
@@ -71,7 +71,7 @@ body {
 }
 
 .button.primary {
-  background: linear-gradient(135deg, #a855f7, #6366f1);
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
   border-color: transparent;
 }
 
@@ -81,7 +81,7 @@ body {
 }
 
 .button.ghost {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.04);
   border-color: var(--ghost);
 }
 
@@ -155,6 +155,39 @@ body {
 
 .training-panel + .training-panel {
   margin-top: 16px;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.pagination-controls .page-indicator {
+  font-size: 0.9rem;
+  color: #c6cad6;
+}
+
+.pagination-controls select {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  padding: 6px 8px;
+}
+
+.pagination-controls .button {
+  padding: 6px 12px;
+}
+
+.limit-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #c6cad6;
 }
 
 .panel {
@@ -275,12 +308,22 @@ body {
 .pending-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .subpanel-actions {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.pending-row-active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pending-row-flagged {
+  background: rgba(251, 191, 36, 0.15);
 }
 
 .pending-actions select {
@@ -290,6 +333,10 @@ body {
   background: transparent;
   color: #f8fafc;
   padding: 6px;
+}
+
+.pending-action-select {
+  min-width: 140px;
 }
 
 .export-row {

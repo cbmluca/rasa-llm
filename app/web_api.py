@@ -54,6 +54,7 @@ class LabelPayload(BaseModel):
     text: str
     reviewer_intent: str
     parser_intent: str = "nlu_fallback"
+    action: Optional[str] = None
 
 
 def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
@@ -139,10 +140,19 @@ def create_app(
         return _format_response(result)
 
     @app.get("/api/logs/pending")
-    def pending_logs(limit: int = 25) -> Dict[str, Any]:
-        items = list_pending_with_hashes(app.state.pending_path, limit=max(1, min(limit, 200)))
+    def pending_logs(limit: int = 25, page: int = 1) -> Dict[str, Any]:
+        capped_limit = max(1, min(limit, 200))
+        page = max(page, 1)
+        items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
         summary = summarize_pending_queue(app.state.pending_path)
-        return {"items": items, "summary": summary}
+        has_more = page * capped_limit < summary.get("total", 0)
+        return {
+            "items": items,
+            "summary": summary,
+            "page": page,
+            "limit": capped_limit,
+            "has_more": has_more,
+        }
 
     @app.get("/api/logs/classifier")
     def classifier_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
@@ -166,6 +176,7 @@ def create_app(
                 text=payload.text,
                 parser_intent=payload.parser_intent,
                 reviewer_intent=payload.reviewer_intent,
+                reviewer_action=payload.action,
                 labeled_path=app.state.labeled_path,
             )
         except ValueError as exc:
@@ -175,7 +186,10 @@ def create_app(
     @app.get("/api/intents")
     def list_intents() -> Dict[str, Any]:
         config = load_intent_config()
-        return {"intents": config.names()}
+        return {
+            "intents": config.names(),
+            "actions": {definition.name: definition.actions for definition in config.definitions()},
+        }
 
     @app.post("/api/logs/export")
     def export_prompts(fmt: str = "csv", dedupe: bool = True) -> Dict[str, Any]:

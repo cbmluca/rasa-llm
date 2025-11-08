@@ -45,9 +45,17 @@ def iter_pending_prompts(path: Path) -> Iterator[dict]:
     return iter_jsonl(path)
 
 
-def review_pending_prompts(path: Path, limit: int = 10) -> list[dict]:
+def review_pending_prompts(path: Path, limit: int = 10, page: int = 1) -> list[dict]:
     entries = list(iter_pending_prompts(path))
-    return entries[-limit:]
+    total = len(entries)
+    if total == 0 or limit <= 0:
+        return []
+    page = max(page, 1)
+    end = total - (page - 1) * limit
+    if end <= 0:
+        return []
+    start = max(end - limit, 0)
+    return entries[start:end]
 
 
 def _write_csv(path: Path, rows: Sequence[dict]) -> None:
@@ -152,12 +160,14 @@ def append_labels(
             text = (row.get("text") or "").strip()
             reviewer_intent = row.get("reviewer_intent") or row.get("label")
             parser_intent = row.get("parser_intent") or row.get("intent") or "unknown"
+            reviewer_action = row.get("reviewer_action") or row.get("action")
             if not text or not reviewer_intent:
                 continue
             if reviewer_intent not in known_intents:
                 continue
             if parser_intent not in known_intents:
                 parser_intent = "nlu_fallback"
+            reviewer_action = _normalize_reviewer_action(parser_intent, reviewer_action, config)
             text_hash = hash_text(text)
             if dedupe and text_hash in existing_hashes:
                 continue
@@ -166,6 +176,7 @@ def append_labels(
                 "text": text,
                 "parser_intent": parser_intent,
                 "reviewer_intent": reviewer_intent,
+                "reviewer_action": reviewer_action,
             }
             handle.write(json.dumps(payload, ensure_ascii=False))
             handle.write("\n")
@@ -183,6 +194,7 @@ def append_label_entry(
     reviewer_intent: str,
     labeled_path: Path,
     dedupe: bool = True,
+    reviewer_action: Optional[str] = None,
 ) -> dict:
     text_value = (text or "").strip()
     if not text_value:
@@ -193,6 +205,8 @@ def append_label_entry(
         raise ValueError(f"Unknown reviewer intent '{reviewer_intent}'.")
     if parser_intent not in known_intents:
         parser_intent = "nlu_fallback"
+
+    reviewer_action = _normalize_reviewer_action(parser_intent, reviewer_action, config)
 
     text_hash = hash_text(text_value)
     if dedupe and labeled_path.exists():
@@ -206,6 +220,7 @@ def append_label_entry(
         "text": text_value,
         "parser_intent": parser_intent,
         "reviewer_intent": reviewer_intent,
+        "reviewer_action": reviewer_action,
     }
     with labeled_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False))
@@ -293,8 +308,8 @@ def summarize_pending_queue(path: Path) -> dict:
     return {"total": total, "by_intent": by_intent}
 
 
-def list_pending_with_hashes(path: Path, *, limit: int) -> List[dict]:
-    rows = review_pending_prompts(path, limit)
+def list_pending_with_hashes(path: Path, *, limit: int, page: int = 1) -> List[dict]:
+    rows = review_pending_prompts(path, limit, page)
     enriched: List[dict] = []
     for row in rows:
         text = row.get("user_text") or ""
@@ -304,3 +319,13 @@ def list_pending_with_hashes(path: Path, *, limit: int) -> List[dict]:
 
 def count_jsonl_rows(path: Path) -> int:
     return sum(1 for _ in iter_jsonl(path))
+
+
+def _normalize_reviewer_action(parser_intent: str, reviewer_action: Optional[str], config) -> Optional[str]:
+    action_value = (reviewer_action or "").strip()
+    valid_actions = set(config.actions_for(parser_intent))
+    if not action_value:
+        return None
+    if valid_actions and action_value not in valid_actions:
+        raise ValueError(f"Action '{action_value}' is not allowed for intent '{parser_intent}'.")
+    return action_value

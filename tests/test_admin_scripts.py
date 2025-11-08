@@ -40,11 +40,26 @@ def test_export_prompts_groups_and_dedup(tmp_path: Path) -> None:
 def test_append_labels_and_dedupe(tmp_path: Path) -> None:
     labels_csv = tmp_path / "labels.csv"
     with labels_csv.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["text", "parser_intent", "reviewer_intent"])
+        writer = csv.DictWriter(handle, fieldnames=["text", "parser_intent", "reviewer_intent", "reviewer_action"])
         writer.writeheader()
-        writer.writerow({"text": "Check weather in Copenhagen", "parser_intent": "weather", "reviewer_intent": "weather"})
-        writer.writerow({"text": "Give me tech news", "parser_intent": "news", "reviewer_intent": "news"})
-        writer.writerow({"text": "check weather in copenhagen", "parser_intent": "weather", "reviewer_intent": "weather"})
+        writer.writerow({
+            "text": "Check weather in Copenhagen",
+            "parser_intent": "weather",
+            "reviewer_intent": "weather",
+            "reviewer_action": "",
+        })
+        writer.writerow({
+            "text": "Give me tech news",
+            "parser_intent": "news",
+            "reviewer_intent": "news",
+            "reviewer_action": "",
+        })
+        writer.writerow({
+            "text": "check weather in copenhagen",
+            "parser_intent": "weather",
+            "reviewer_intent": "weather",
+            "reviewer_action": "",
+        })
 
     labeled_path = tmp_path / "labeled.jsonl"
     outcome = admin.append_labels(
@@ -59,6 +74,8 @@ def test_append_labels_and_dedupe(tmp_path: Path) -> None:
     assert len(lines) == 2
     records = [json.loads(line) for line in lines]
     assert {record["reviewer_intent"] for record in records} == {"weather", "news"}
+    for record in records:
+        assert "reviewer_action" in record
 
 
 def test_review_classifier_predictions_flags_mismatches(tmp_path: Path) -> None:

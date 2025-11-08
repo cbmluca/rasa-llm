@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -23,6 +23,7 @@ class IntentDefinition:
     name: str
     tool: Optional[str]
     description: str = ""
+    actions: List[str] = field(default_factory=list)
 
 
 class IntentConfig:
@@ -49,6 +50,12 @@ class IntentConfig:
     def definitions(self) -> List[IntentDefinition]:
         return list(self._intents.values())
 
+    def actions_for(self, name: str) -> List[str]:
+        definition = self.get(name)
+        if not definition:
+            return []
+        return list(definition.actions)
+
 
 def load_intent_config(path: Path | str | None = None) -> IntentConfig:
     """Load the YAML intent config into an ``IntentConfig`` instance."""
@@ -70,9 +77,15 @@ def load_intent_config(path: Path | str | None = None) -> IntentConfig:
         name = entry.get("name")
         tool = entry.get("tool")
         description = entry.get("description", "")
+        raw_actions = entry.get("actions") or []
+        actions: List[str] = []
+        if isinstance(raw_actions, list):
+            for action in raw_actions:
+                if isinstance(action, str) and action.strip():
+                    actions.append(action.strip())
         if not name:
             continue
-        intents.append(IntentDefinition(name=name, tool=tool, description=description))
+        intents.append(IntentDefinition(name=name, tool=tool, description=description, actions=actions))
 
     if not intents:
         raise ValueError("Intent config did not yield any valid intent definitions.")

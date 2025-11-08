@@ -1,7 +1,23 @@
 const flaggedPrompts = new Set();
+const DEFAULT_INTENT_ACTIONS = {
+  todo_list: ['list', 'create', 'update', 'delete'],
+  kitchen_tips: ['list', 'search', 'get', 'create'],
+  calendar_edit: ['list', 'create', 'update', 'delete'],
+  app_guide: ['list', 'get', 'upsert', 'delete'],
+};
+const MAX_LABELED_CACHE = 50;
+const STORAGE_KEYS = {
+  ACTIVE_PAGE: 'tier5_active_page',
+  SCROLL_PREFIX: 'tier5_scroll_',
+  PENDING_PAGE: 'tier5_pending_page',
+  PENDING_LIMIT: 'tier5_pending_limit',
+};
+
+let currentPageId = 'front-page';
 const state = {
   chat: [],
   intents: [],
+  intentActions: {},
   pending: [],
   classifier: [],
   labeled: [],
@@ -11,6 +27,10 @@ const state = {
   appGuide: [],
   exports: [],
   stats: {},
+  pendingPage: 1,
+  pendingLimit: 10,
+  pendingHasMore: false,
+  pendingActiveIndex: 0,
 };
 
 const el = {
@@ -19,6 +39,10 @@ const el = {
   chatInput: document.querySelector('#chat-input'),
   chatStatus: document.querySelector('#chat-status'),
   pendingTable: document.querySelector('#pending-table tbody'),
+  pendingPrev: document.querySelector('#pending-prev'),
+  pendingNext: document.querySelector('#pending-next'),
+  pendingPageLabel: document.querySelector('#pending-page'),
+  pendingLimitSelect: document.querySelector('#pending-limit'),
   classifierTable: document.querySelector('#classifier-table tbody'),
   labeledTable: document.querySelector('#labeled-table tbody'),
   pendingRefresh: document.querySelector('#pending-refresh'),
@@ -42,6 +66,7 @@ const el = {
   guideList: document.querySelector('#guide-list'),
   guideForm: document.querySelector('#guide-form'),
   toast: document.querySelector('#toast'),
+  trainingPage: document.querySelector('#training-page'),
 };
 
 const navButtons = document.querySelectorAll('.nav-link');
@@ -89,6 +114,18 @@ function setChatStatus(text) {
 }
 
 function switchPage(targetId) {
+  if (!targetId || currentPageId === targetId) {
+    return;
+  }
+  try {
+    if (currentPageId) {
+      const previousKey = `${STORAGE_KEYS.SCROLL_PREFIX}${currentPageId}`;
+      localStorage.setItem(previousKey, String(window.scrollY));
+    }
+  } catch (err) {
+    // ignore storage errors
+  }
+
   pageViews.forEach((view) => {
     if (!view) return;
     view.classList.toggle('active', view.id === targetId);
@@ -96,6 +133,56 @@ function switchPage(targetId) {
   navButtons.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.target === targetId);
   });
+
+  currentPageId = targetId;
+  try {
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_PAGE, targetId);
+    const saved = localStorage.getItem(`${STORAGE_KEYS.SCROLL_PREFIX}${targetId}`);
+    const value = saved ? Number(saved) : 0;
+    if (!Number.isNaN(value)) {
+      window.scrollTo({ top: value });
+    } else {
+      window.scrollTo({ top: 0 });
+    }
+  } catch (err) {
+    window.scrollTo({ top: 0 });
+  }
+}
+
+function getActionsForIntent(intent) {
+  if (!intent) {
+    return [];
+  }
+  return state.intentActions[intent] || DEFAULT_INTENT_ACTIONS[intent] || [];
+}
+
+function updateActionSelectOptions(select, intent, defaultValue) {
+  const actions = getActionsForIntent(intent);
+  select.innerHTML = '';
+  if (!actions.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No actions';
+    select.appendChild(option);
+    select.disabled = true;
+    select.value = '';
+    return;
+  }
+
+  select.disabled = false;
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose action';
+  select.appendChild(placeholder);
+  actions.forEach((action) => {
+    const option = document.createElement('option');
+    option.value = action;
+    option.textContent = action;
+    select.appendChild(option);
+  });
+  if (defaultValue && actions.includes(defaultValue)) {
+    select.value = defaultValue;
+  }
 }
 
 function renderChat() {
@@ -138,17 +225,22 @@ function renderChat() {
 function renderPending() {
   if (!el.pendingTable) return;
   el.pendingTable.innerHTML = '';
-  state.pending.forEach((item) => {
+  state.pending.forEach((item, index) => {
+    const rowIndex = index;
     const row = document.createElement('tr');
+    row.dataset.index = index;
+
     const textCell = document.createElement('td');
     textCell.textContent = item.user_text || '—';
     const intentCell = document.createElement('td');
     intentCell.textContent = item.intent || 'nlu_fallback';
     const reasonCell = document.createElement('td');
     reasonCell.textContent = item.reason || 'review';
+
     const actionCell = document.createElement('td');
     const container = document.createElement('div');
     container.className = 'pending-actions';
+
     const select = document.createElement('select');
     const placeholder = document.createElement('option');
     placeholder.value = '';
@@ -163,28 +255,75 @@ function renderPending() {
       }
       select.appendChild(option);
     });
+
+    const actionSelect = document.createElement('select');
+    actionSelect.className = 'pending-action-select';
+    updateActionSelectOptions(actionSelect, item.intent || select.value, item.action);
+
+    select.addEventListener('change', () => {
+      const targetIntent = select.value || item.intent;
+      updateActionSelectOptions(actionSelect, targetIntent, null);
+    });
+
     const assignButton = document.createElement('button');
     assignButton.className = 'button primary';
     assignButton.type = 'button';
+    assignButton.dataset.action = 'save';
     assignButton.textContent = 'Save';
     assignButton.addEventListener('click', async () => {
       if (!select.value) {
         showToast('Choose an intent first');
         return;
       }
+      if (!actionSelect.disabled && !actionSelect.value) {
+        showToast('Choose an action');
+        return;
+      }
       try {
-        await fetchJSON('/api/logs/label', {
+        const actionValue = actionSelect.disabled ? null : actionSelect.value;
+        const result = await fetchJSON('/api/logs/label', {
           method: 'POST',
-          body: JSON.stringify({ text: item.user_text, parser_intent: item.intent, reviewer_intent: select.value }),
+          body: JSON.stringify({
+            text: item.user_text,
+            parser_intent: item.intent,
+            reviewer_intent: select.value,
+            action: actionValue,
+          }),
         });
         showToast('Label saved');
-        await Promise.all([loadLabeled(), loadPending()]);
+        if (result?.record) {
+          state.labeled = [result.record, ...state.labeled].slice(0, MAX_LABELED_CACHE);
+          renderLabeled();
+        } else {
+          loadLabeled();
+        }
+
+        state.pending.splice(rowIndex, 1);
+        if (state.stats.pending && typeof state.stats.pending.total === 'number') {
+          state.stats.pending.total = Math.max(0, state.stats.pending.total - 1);
+          renderStats();
+        }
+        if (!state.pending.length && state.pendingHasMore) {
+          state.pendingPage = Math.max(1, state.pendingPage - 1);
+          persistPendingState();
+          loadPending();
+        } else {
+          state.pendingActiveIndex = Math.min(state.pendingActiveIndex, state.pending.length - 1);
+          if (state.pendingActiveIndex < 0) {
+            state.pendingActiveIndex = 0;
+          }
+          renderPending();
+          persistPendingState();
+        }
       } catch (err) {
         showToast(err.message || 'Failed to label prompt', 'error');
       }
     });
+
     container.appendChild(select);
+    container.appendChild(actionSelect);
     container.appendChild(assignButton);
+
     const flagButton = document.createElement('button');
     flagButton.className = 'button ghost';
     flagButton.type = 'button';
@@ -202,15 +341,81 @@ function renderPending() {
     });
     container.appendChild(flagButton);
     actionCell.appendChild(container);
+
     row.appendChild(textCell);
     row.appendChild(intentCell);
     row.appendChild(reasonCell);
     row.appendChild(actionCell);
+
     if (flaggedPrompts.has(item.text_hash)) {
-      row.style.background = 'rgba(251, 191, 36, 0.15)';
+      row.classList.add('pending-row-flagged');
     }
+
     el.pendingTable.appendChild(row);
   });
+
+  if (!state.pending.length) {
+    state.pendingActiveIndex = -1;
+  } else if (state.pendingActiveIndex >= state.pending.length || state.pendingActiveIndex < 0) {
+    state.pendingActiveIndex = 0;
+  }
+  applyPendingHighlight();
+  updatePendingNav();
+}
+
+function updatePendingNav() {
+  if (el.pendingPageLabel) {
+    el.pendingPageLabel.textContent = String(state.pendingPage);
+  }
+  if (el.pendingPrev) {
+    el.pendingPrev.disabled = state.pendingPage <= 1;
+  }
+  if (el.pendingNext) {
+    el.pendingNext.disabled = !state.pendingHasMore;
+  }
+  if (el.pendingLimitSelect) {
+    el.pendingLimitSelect.value = String(state.pendingLimit);
+  }
+}
+
+function persistPendingState() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PENDING_PAGE, String(state.pendingPage));
+    localStorage.setItem(STORAGE_KEYS.PENDING_LIMIT, String(state.pendingLimit));
+  } catch (err) {
+    // ignore storage failures
+  }
+}
+
+function applyPendingHighlight() {
+  if (!el.pendingTable) return;
+  const rows = el.pendingTable.querySelectorAll('tr');
+  rows.forEach((row, idx) => {
+    row.classList.toggle('pending-row-active', idx === state.pendingActiveIndex);
+  });
+  const activeRow = rows[state.pendingActiveIndex];
+  if (activeRow) {
+    activeRow.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function movePendingSelection(delta) {
+  if (!state.pending.length) return;
+  const nextIndex = Math.min(Math.max(state.pendingActiveIndex + delta, 0), state.pending.length - 1);
+  if (nextIndex === state.pendingActiveIndex) return;
+  state.pendingActiveIndex = nextIndex;
+  applyPendingHighlight();
+}
+
+function triggerPendingSave() {
+  if (!el.pendingTable || state.pendingActiveIndex < 0) return;
+  const rows = el.pendingTable.querySelectorAll('tr');
+  const row = rows[state.pendingActiveIndex];
+  if (!row) return;
+  const button = row.querySelector('button[data-action="save"]');
+  if (button) {
+    button.click();
+  }
 }
 
 function renderClassifier() {
@@ -242,7 +447,7 @@ function renderLabeled() {
   el.labeledTable.innerHTML = '';
   state.labeled.forEach((item) => {
     const row = document.createElement('tr');
-    ['text', 'parser_intent', 'reviewer_intent', 'timestamp'].forEach((key) => {
+    ['text', 'parser_intent', 'reviewer_intent', 'reviewer_action'].forEach((key) => {
       const cell = document.createElement('td');
       cell.textContent = item[key] || '—';
       row.appendChild(cell);
@@ -364,17 +569,28 @@ async function loadIntents() {
   try {
     const data = await fetchJSON('/api/intents');
     state.intents = data.intents || [];
+    state.intentActions = data.actions || {};
   } catch (err) {
     console.warn('Failed to load intents', err);
   }
 }
 
 async function loadPending() {
-  const data = await fetchJSON('/api/logs/pending');
+  const params = new URLSearchParams({ limit: state.pendingLimit, page: state.pendingPage });
+  const data = await fetchJSON(`/api/logs/pending?${params.toString()}`);
   state.pending = data.items || [];
-  renderPending();
   state.stats.pending = data.summary;
+  state.pendingHasMore = Boolean(data.has_more);
+  if (typeof data.page === 'number') {
+    state.pendingPage = data.page;
+  }
+  if (typeof data.limit === 'number') {
+    state.pendingLimit = data.limit;
+  }
+  state.pendingActiveIndex = state.pending.length ? 0 : -1;
+  renderPending();
   renderStats();
+  persistPendingState();
 }
 
 async function loadClassifier() {
@@ -490,7 +706,28 @@ function wireEvents() {
     }
   });
 
-  el.pendingRefresh?.addEventListener('click', loadPending);
+  el.pendingRefresh?.addEventListener('click', () => {
+    loadPending();
+  });
+  el.pendingPrev?.addEventListener('click', () => {
+    if (state.pendingPage <= 1) return;
+    state.pendingPage -= 1;
+    persistPendingState();
+    loadPending();
+  });
+  el.pendingNext?.addEventListener('click', () => {
+    if (!state.pendingHasMore) return;
+    state.pendingPage += 1;
+    persistPendingState();
+    loadPending();
+  });
+  el.pendingLimitSelect?.addEventListener('change', (event) => {
+    const value = Number(event.target.value) || 10;
+    state.pendingLimit = value;
+    state.pendingPage = 1;
+    persistPendingState();
+    loadPending();
+  });
   el.classifierRefresh?.addEventListener('click', loadClassifier);
   el.labeledRefresh?.addEventListener('click', loadLabeled);
   el.refreshButton?.addEventListener('click', () => {
@@ -563,6 +800,27 @@ function wireEvents() {
     await mutateStore('app_guide', payload);
     el.guideForm.reset();
   });
+
+  document.addEventListener('keydown', (event) => {
+    const trainingActive = el.trainingPage?.classList.contains('active');
+    if (!trainingActive || !state.pending.length) {
+      return;
+    }
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    if (['input', 'textarea', 'select'].includes(tag)) {
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key.toLowerCase() === 'j') {
+      event.preventDefault();
+      movePendingSelection(1);
+    } else if (event.key === 'ArrowUp' || event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      movePendingSelection(-1);
+    } else if (event.key === 'Enter' || event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      triggerPendingSave();
+    }
+  });
 }
 
 async function refreshStores() {
@@ -572,7 +830,24 @@ async function refreshStores() {
 async function bootstrap() {
   wireEvents();
   setChatStatus('Ready');
-  switchPage('front-page');
+  let initialPage = 'front-page';
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.ACTIVE_PAGE);
+    if (stored && document.getElementById(stored)) {
+      initialPage = stored;
+    }
+    const storedPendingPage = Number(localStorage.getItem(STORAGE_KEYS.PENDING_PAGE));
+    if (!Number.isNaN(storedPendingPage) && storedPendingPage > 0) {
+      state.pendingPage = storedPendingPage;
+    }
+    const storedPendingLimit = Number(localStorage.getItem(STORAGE_KEYS.PENDING_LIMIT));
+    if (!Number.isNaN(storedPendingLimit) && storedPendingLimit > 0) {
+      state.pendingLimit = storedPendingLimit;
+    }
+  } catch (err) {
+    // ignore storage errors
+  }
+  switchPage(initialPage);
   await loadIntents();
   await Promise.all([loadStats(), loadPending(), loadClassifier(), loadLabeled(), refreshStores()]);
 }
