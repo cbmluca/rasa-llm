@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence
 
 from core.intent_config import load_intent_config
+from core.text_utils import hash_text, normalize_text
 
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
@@ -26,19 +26,6 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
                 yield json.loads(line)
             except json.JSONDecodeError:
                 continue
-
-
-def normalize_text(value: str) -> str:
-    """Normalize whitespace/case for consistent hashing."""
-
-    return " ".join((value or "").split()).strip().lower()
-
-
-def hash_text(value: str) -> str:
-    normalized = normalize_text(value)
-    if not normalized:
-        return ""
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def iter_pending_prompts(path: Path) -> Iterator[dict]:
@@ -128,14 +115,17 @@ def load_label_rows(path: Path, fmt: str) -> list[dict]:
     raise ValueError("Label import expects a list of objects.")
 
 
-def load_label_lookup(path: Path) -> Dict[str, str]:
-    lookup: Dict[str, str] = {}
+def load_label_lookup(path: Path) -> Dict[str, Dict[str, Optional[str]]]:
+    lookup: Dict[str, Dict[str, Optional[str]]] = {}
     for record in iter_jsonl(path):
         text = record.get("text")
         reviewer = record.get("reviewer_intent")
         if not text or not reviewer:
             continue
-        lookup[hash_text(text)] = reviewer
+        lookup[hash_text(text)] = {
+            "intent": reviewer,
+            "action": record.get("reviewer_action") or None,
+        }
     return lookup
 
 
@@ -247,7 +237,9 @@ def review_classifier_predictions(
         if intent and classifier_intent != intent:
             continue
         text_hash = hash_text(record.get("user_text") or "")
-        reviewer_intent = label_lookup.get(text_hash)
+        reviewer_entry = label_lookup.get(text_hash) or {}
+        reviewer_intent = reviewer_entry.get("intent")
+        reviewer_action = reviewer_entry.get("action")
         tool_success = record.get("tool_success")
         resolution_status = record.get("resolution_status")
         mismatch = reviewer_intent is not None and reviewer_intent != classifier_intent
@@ -262,6 +254,7 @@ def review_classifier_predictions(
                     "classifier_intent": classifier_intent,
                     "classifier_confidence": extras.get("classifier_confidence"),
                     "reviewer_intent": reviewer_intent,
+                    "reviewer_action": reviewer_action,
                     "tool_success": tool_success,
                     "resolution_status": resolution_status,
                 }

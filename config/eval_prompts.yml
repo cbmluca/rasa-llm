@@ -1,0 +1,14 @@
+prompts:
+  - prompt: "Add a todo called \"buy milk\" due tomorrow"
+    expected_intent: todo_list
+    expected_action: create
+  - prompt: "Mark \"update roadmap\" as finished"
+    expected_intent: todo_list
+    expected_action: update
+  - prompt: "Schedule \"Design sync\" on Friday at 10am in HQ"
+    expected_intent: calendar_edit
+    expected_action: create
+  - prompt: "What are the latest news about AI regulation?"
+    expected_intent: news
+  - prompt: "What's the weather like in Copenhagen tomorrow?"
+    expected_intent: weather

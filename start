@@ -16,6 +16,10 @@ case "$1" in
     shift
     python -m app.web_api "$@"
     ;;
+  eval)
+    shift
+    python -m app.eval_suite "$@"
+    ;;
   *)
     echo "Unknown shortcut '$1'. Available: orch, web"
     exit 1

@@ -1,4 +1,4 @@
-import core.news_service as news
+import tools.news_tool as news
 
 
 def test_topic_news_search_prefers_danish_rss(monkeypatch):

@@ -20,6 +20,7 @@ from app.config import (
 from core.learning_logger import LearningLogger
 from core.llm_router import LLMRouter
 from core.nlu_service import NLUService
+from core.payload_builder import PayloadBuilder
 from core.orchestrator import Orchestrator
 from core.tool_registry import ToolRegistry
 from core.intent_classifier import IntentClassifier
@@ -32,6 +33,7 @@ def build_orchestrator() -> Orchestrator:
         get_nlu_threshold(),
         classifier=classifier,
         classifier_threshold=get_classifier_min_score(),
+        payload_builder=PayloadBuilder(),
     )
     registry = ToolRegistry()
     load_all_core_tools(registry)

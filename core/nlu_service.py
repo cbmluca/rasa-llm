@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from core.command_parser import parse_command
 from core.intent_classifier import ClassifierPrediction, IntentClassifier
+from core.payload_builder import PayloadBuilder
 
 
 @dataclass
@@ -31,10 +32,12 @@ class NLUService:
         *,
         classifier: Optional[IntentClassifier] = None,
         classifier_threshold: float = 0.55,
+        payload_builder: Optional[PayloadBuilder] = None,
     ) -> None:
         self._threshold = threshold
         self._classifier = classifier
         self._classifier_threshold = classifier_threshold
+        self._payload_builder = payload_builder or PayloadBuilder()
 
     def parse(self, message: str) -> NLUResult:
         original = message or ""
@@ -97,7 +100,12 @@ class NLUService:
             return None
         if prediction.confidence < self._classifier_threshold:
             return None
-        return NLUResult(intent=prediction.intent, confidence=prediction.confidence, source="classifier")
+        result = NLUResult(intent=prediction.intent, confidence=prediction.confidence, source="classifier")
+        if self._payload_builder:
+            repaired = self._payload_builder.build(prediction.intent, message)
+            if repaired:
+                result.entities.update(repaired)
+        return result
 
 
 __all__ = ["NLUResult", "NLUService"]
