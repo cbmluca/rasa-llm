@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from knowledge.app_guide import AppGuideStore
+from knowledge.app_guide import AppGuideStore, _DEFAULT_STORAGE_PATH as _STORE_DEFAULT_PATH
+
+_DEFAULT_STORAGE_PATH = _STORE_DEFAULT_PATH
 
 
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Handle knowledge base commands (list/get/upsert/delete)."""
 
     action = str(payload.get("action", "list")).strip().lower() or "list"
-    store = AppGuideStore()
+    store = AppGuideStore(storage_path=_DEFAULT_STORAGE_PATH)
 
     if action == "list":
         sections = store.list_sections()

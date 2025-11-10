@@ -60,3 +60,41 @@ def test_topic_news_search_falls_back_to_rss_when_newsapi_empty(monkeypatch):
 def test_news_search_limit_matches_config(monkeypatch):
     monkeypatch.setattr(news, "_NEWS_SEARCH_LIMIT", 7)
     assert news.news_search_limit() == 7
+
+
+def test_run_infers_topic_from_prompt_when_missing(monkeypatch):
+    captured = {}
+
+    def fake_topic_search(query, **kwargs):
+        captured["query"] = query
+        return [{"title": "Result", "url": "https://example.com"}]
+
+    monkeypatch.setattr(news, "topic_news_search", fake_topic_search)
+
+    result = news.run({"message": "Catch me up on AI regulation news."})
+
+    assert captured["query"] == "AI regulation"
+    assert result["topic"] == "AI regulation"
+
+
+def test_topic_extraction_handles_headlines_with_about(monkeypatch):
+    captured = {}
+
+    def fake_topic_search(query, **kwargs):
+        captured.setdefault("queries", []).append(query)
+        return [{"title": "Result", "url": "https://example.com"}]
+
+    monkeypatch.setattr(news, "topic_news_search", fake_topic_search)
+
+    news.run({"message": "I need tech headlines about semiconductor shortages."})
+
+    assert captured["queries"][0] == "semiconductor shortages"
+
+
+def test_format_news_list_embeds_links():
+    formatted = news.format_news_list({
+        "stories": [{"title": "Sports", "url": "https://example.com/sports"}],
+        "topic": "sports",
+    })
+
+    assert "[Sports](https://example.com/sports)" in formatted

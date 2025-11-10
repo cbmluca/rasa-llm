@@ -8,9 +8,48 @@ from __future__ import annotations
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, time as dt_time
+import re
 import requests
 
 _DEFAULT_CITY = "Copenhagen"
+_CITY_SANITIZE_RE = re.compile(r"[^A-Za-zÀ-ÖØ-öø-ÿ' .-]+")
+_CITY_STOP_WORDS = {
+    "weather",
+    "forecast",
+    "temperature",
+    "whats",
+    "what",
+    "is",
+    "the",
+    "latest",
+    "current",
+    "right",
+    "now",
+    "today",
+    "tonight",
+    "tomorrow",
+    "morning",
+    "afternoon",
+    "evening",
+    "please",
+    "give",
+    "show",
+    "tell",
+    "me",
+    "need",
+    "in",
+    "for",
+    "på",
+    "til",
+    "i",
+    "på",
+    "som",
+    "going",
+    "to",
+    "be",
+    "like",
+}
+_CITY_MAX_LENGTH = 60
 
 # --- External API helper functions -----------------------------------------
 def geocode_city(name: str) -> Optional[Dict[str, Any]]:
@@ -67,15 +106,18 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 # --- Orchestrator-facing tool functions ------------------------------------
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
-    city = (payload.get("city") or payload.get("location") or "").strip()
-    default_note = None
-    if not city:
-        city = _DEFAULT_CITY
-        default_note = f"No city provided; defaulting to {city}."
+
+    city, default_note = _resolve_city(payload)
 
     loc = geocode_city(city)
     if not loc:
-        return {"error": "not_found", "message": f"Could not find city '{city}'."}
+        inferred = _infer_city_from_message(payload.get("message"))
+        if inferred and inferred.lower() != city.lower():
+            loc = geocode_city(inferred)
+            if loc:
+                city = inferred
+        if not loc:
+            return {"error": "not_found", "message": f"Could not find city '{city}'."}
 
     time_hint = payload.get("time") if isinstance(payload.get("time"), dict) else None
     if time_hint:
@@ -122,6 +164,56 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         "mode": "current",
         "note": note,
     }
+
+
+def _resolve_city(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    raw_city = str(payload.get("city") or payload.get("location") or "").strip()
+    normalized = _normalize_city_name(raw_city)
+    if normalized:
+        return normalized, None
+
+    inferred = _infer_city_from_message(payload.get("message"))
+    if inferred:
+        return inferred, None
+
+    return _DEFAULT_CITY, f"No city provided; defaulting to {_DEFAULT_CITY}."
+
+
+def _normalize_city_name(candidate: str) -> str:
+    if not candidate:
+        return ""
+
+    cleaned = _CITY_SANITIZE_RE.sub(" ", candidate)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-\t\n")
+    if not cleaned:
+        return ""
+
+    tokens = [token for token in cleaned.split() if token.lower() not in _CITY_STOP_WORDS]
+    normalized = " ".join(tokens).strip(" .-\t\n")
+    if not normalized:
+        return ""
+    return normalized[:_CITY_MAX_LENGTH]
+
+
+def _infer_city_from_message(message: Any) -> str:
+    if not isinstance(message, str):
+        return ""
+    text = message.strip()
+    if not text:
+        return ""
+
+    patterns = [
+        re.compile(r"\b(?:in|i|for|til|på)\s+(?P<city>[A-Za-zÀ-ÖØ-öø-ÿ' .-]{3,})", re.IGNORECASE),
+        re.compile(r"(?P<city>[A-Za-zÀ-ÖØ-öø-ÿ' .-]{3,})\s+(?:weather|forecast|temperature|vejret|vejr)", re.IGNORECASE),
+    ]
+    for pattern in patterns:
+        match = pattern.search(text)
+        if not match:
+            continue
+        normalized = _normalize_city_name(match.group("city"))
+        if normalized:
+            return normalized
+    return ""
 
 # --- Formatting helpers ----------------------------------------------------
 def format_weather_response(result: Dict[str, Any]) -> str:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import todo_list
+from tools import todo_list_tool as todo_list
 
 
 def test_todo_run_create_update_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -28,11 +28,34 @@ def test_todo_run_create_update_delete(tmp_path: Path, monkeypatch: pytest.Monke
 
     formatted = todo_list.format_todo_response(listed)
     assert "Buy milk" in formatted
-    assert "Raw:" in formatted
+    assert "Raw:" not in formatted
 
     deleted = todo_list.run({"action": "delete", "id": todo_id})
     assert deleted["deleted"] is True
     assert todo_list.run({"action": "list"})["count"] == 0
+
+
+def test_todo_integration_create_update_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    create_cmd = 'Add a todo "Tier X - UI" deadline 1/12/2025 notes "Initial note"'
+    parsed = parse_command(create_cmd)
+    assert parsed is not None
+    created = todo_list.run(parsed.payload)
+    todo_id = created["todo"]["id"]
+    assert created["todo"]["title"] == "Tier X - UI"
+
+    update_cmd = "Complete the task to Tier X - UI"
+    parsed_update = parse_command(update_cmd)
+    parsed_update.payload["id"] = todo_id
+    updated = todo_list.run(parsed_update.payload)
+    assert updated["todo"]["status"] == "completed"
+
+    delete_cmd = "Delete todo Tier X - UI"
+    parsed_delete = parse_command(delete_cmd)
+    deleted = todo_list.run(parsed_delete.payload)
+    assert deleted["deleted"] is True
 
 
 def test_todo_run_validations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,3 +177,38 @@ def test_todo_update_and_delete_by_title(tmp_path: Path, monkeypatch: pytest.Mon
     deleted = todo_list.run({"action": "delete", "target_title": "By Title"})
     assert deleted["deleted"] is True
 
+
+def test_todo_message_priority_and_title_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    message = "Add a todo reminding me to buy coffee beans next Friday, mark it as urgent."
+    created = todo_list.run({"action": "create", "message": message})
+    todo = created["todo"]
+
+    assert todo["title"].lower() == "buy coffee beans next friday"
+    assert todo["priority"] == "high"
+
+
+def test_todo_title_from_form_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    message = "Add a todo from this form: Follow up with QA, deadline 2024-12-01."
+    created = todo_list.run({"action": "create", "message": message})
+    todo = created["todo"]
+
+    assert todo["title"].lower() == "follow up with qa"
+    assert todo["deadline"] == "2024-12-01"
+
+
+def test_todo_title_from_titled_keyword(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    message = "create a todo titled expense report due 2024-12-01"
+    created = todo_list.run({"action": "create", "message": message})
+    todo = created["todo"]
+
+    assert todo["title"].lower() == "expense report"
+    assert todo["deadline"] == "2024-12-01"

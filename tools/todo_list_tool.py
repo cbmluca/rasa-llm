@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from dataclasses import asdict, dataclass, replace
@@ -64,6 +63,40 @@ _DANISH_MONTHS = {
 }
 _DATE_PATTERN = re.compile(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}")
 _DATE_TEXT_PATTERN = re.compile(r"\d{1,2}\s*[A-Za-zÆØÅæøå]+\s+\d{2,4}", re.IGNORECASE)
+_TITLE_PREFIX_PATTERNS = [
+    re.compile(r"^(?:please\s+)?add\s+(?:a\s+)?todo\s+(?:reminding\s+me\s+to\s+)?", re.IGNORECASE),
+    re.compile(r"^(?:please\s+)?create\s+(?:a\s+)?todo\s+(?:reminding\s+me\s+to\s+)?", re.IGNORECASE),
+    re.compile(r"^(?:please\s+)?add\s+(?:a\s+)?task\s+", re.IGNORECASE),
+    re.compile(r"^(?:please\s+)?create\s+(?:a\s+)?task\s+", re.IGNORECASE),
+    re.compile(r"^remind\s+me\s+to\s+", re.IGNORECASE),
+    re.compile(r"^reminding\s+me\s+to\s+", re.IGNORECASE),
+    re.compile(r"^remember\s+to\s+", re.IGNORECASE),
+    re.compile(r"^remember\s+", re.IGNORECASE),
+    re.compile(r"^todo\s*[:=-]?\s*", re.IGNORECASE),
+    re.compile(r"^task\s*[:=-]?\s*", re.IGNORECASE),
+    re.compile(r"^add\s+a?\s+todo\s+from\s+this\s+form\s*[:,-]?\s*", re.IGNORECASE),
+    re.compile(r"^from\s+this\s+form\s*[:,-]?\s*", re.IGNORECASE),
+    re.compile(r"^titled\s+", re.IGNORECASE),
+]
+_TITLE_KEYWORD_PATTERNS = [
+    re.compile(r"\btitled?\s+([^.,;]+)", re.IGNORECASE),
+    re.compile(r"\btitle\s+([^.,;]+)", re.IGNORECASE),
+    re.compile(r"\bcalled\s+([^.,;]+)", re.IGNORECASE),
+    re.compile(r"\bnamed\s+([^.,;]+)", re.IGNORECASE),
+]
+_ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
+_PRIORITY_MAP = {
+    "urgent": "high",
+    "high": "high",
+    "high priority": "high",
+    "critical": "high",
+    "medium": "medium",
+    "normal": "normal",
+    "standard": "normal",
+    "low": "low",
+    "low priority": "low",
+    "not urgent": "low",
+}
 
 
 @dataclass
@@ -77,6 +110,7 @@ class TodoItem:
     updated_at: str
     notes: Optional[List[str]] = None
     deadline: Optional[str] = None
+    priority: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -99,7 +133,14 @@ class TodoStore:
             todos.append(todo_dict)
         return todos
 
-    def create_todo(self, title: str, notes: Optional[List[str]], status: str, deadline: Optional[str]) -> Dict[str, Any]:
+    def create_todo(
+        self,
+        title: str,
+        notes: Optional[List[str]],
+        status: str,
+        deadline: Optional[str],
+        priority: Optional[str],
+    ) -> Dict[str, Any]:
         now = _utc_timestamp()
         entries = self._load_items()
         normalized_title = title.strip().lower()
@@ -113,6 +154,7 @@ class TodoStore:
             updated_at=now,
             notes=notes,
             deadline=deadline,
+            priority=priority,
         )
         entries.append(item)
         self._write_items(entries)
@@ -128,6 +170,7 @@ class TodoStore:
         clear_notes: bool = False,
         deadline: Optional[str] = None,
         clear_deadline: bool = False,
+        priority: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         entries = self._load_items()
         updated: Optional[TodoItem] = None
@@ -147,6 +190,10 @@ class TodoStore:
                 new_notes = notes
             else:
                 new_notes = entry.notes
+            new_priority = entry.priority
+            if priority is not None:
+                new_priority = priority
+
             new_entry = replace(
                 entry,
                 title=title if title is not None else entry.title,
@@ -154,6 +201,7 @@ class TodoStore:
                 notes=new_notes,
                 updated_at=_utc_timestamp(),
                 deadline=new_deadline,
+                priority=new_priority,
             )
             entries[idx] = new_entry
             updated = new_entry
@@ -202,6 +250,7 @@ class TodoStore:
                     created_at=str(item.get("created_at", "")).strip() or _utc_timestamp(),
                     updated_at=str(item.get("updated_at", "")).strip() or _utc_timestamp(),
                     deadline=_normalize_deadline(str(item.get("deadline", "")).strip() or None),
+                    priority=_coerce_priority(item.get("priority")),
                 )
             )
         return entries
@@ -243,9 +292,10 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             return _error_response("create", "invalid_deadline", str(exc))
         message_deadline = _extract_deadline_from_message(payload) if not deadline_value else None
         deadline_iso = deadline_value or message_deadline
+        priority = _extract_priority(payload)
 
         try:
-            todo = store.create_todo(title=title, notes=notes, status=status, deadline=deadline_iso)
+            todo = store.create_todo(title=title, notes=notes, status=status, deadline=deadline_iso, priority=priority)
         except ValueError as exc:
             if str(exc) == "duplicate_title":
                 return _error_response("create", "duplicate_title", f"Todo '{title}' already exists.")
@@ -298,14 +348,16 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         message_deadline = _extract_deadline_from_message(payload) if not field_provided else None
         deadline_value = deadline_field_value or message_deadline
         deadline_requested = field_provided or message_deadline is not None
+        priority_value = _extract_priority(payload)
 
         if (
             title_value is None
             and status_value is None
             and not notes_field_present
             and not deadline_requested
+            and priority_value is None
         ):
-            return _error_response("update", "missing_updates", "Provide at least one field to update.")
+            return _error_response("update", "missing_updates", "Provide at least one field (title, status, notes, deadline, priority) to update.")
 
         updated = store.update_todo(
             todo_id,
@@ -315,6 +367,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             clear_notes=notes_field_present and notes_value is None,
             deadline=deadline_value,
             clear_deadline=deadline_cleared,
+            priority=priority_value,
         )
         if not updated:
             return _error_response("update", "not_found", f"Todo '{todo_id}' was not found.")
@@ -339,50 +392,64 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def format_todo_response(result: Dict[str, Any]) -> str:
-    """Render a human-friendly summary for todo operations plus raw payload."""
+    """Render a human-friendly summary for todo operations."""
 
     if "error" in result:
-        return _with_raw_output(result.get("message", "Todo action failed."), result, include_raw=False)
+        return result.get("message", "Todo action failed.")
 
     action = result.get("action")
     if action == "list":
         todos = result.get("todos") or []
         if not todos:
-            return _with_raw_output("Your todo list is empty.", result)
-        lines = []
+            return "Your todo list is empty."
+        lines: List[str] = []
         for item in todos:
             status_box = "x" if item.get("status") == "completed" else " "
-            title = item.get("title", "Untitled")
-            parts = [f"- [{status_box}] {title} (#{item.get('id')})"]
+            priority_label = _format_priority_label(item.get("priority"))
+            line = f"- [{status_box}]"
+            if priority_label:
+                line += f" [{priority_label}]"
+            line += f" {item.get('title', 'Untitled')} (#{item.get('id')})"
             if item.get("deadline"):
                 days = item.get("deadline_days_until")
                 if days is not None:
                     countdown = f"{days} days" if days != 1 else "1 day"
-                    parts.append(f"due {item['deadline']} ({countdown})")
+                    line += f" due {item['deadline']} ({countdown})"
                 else:
-                    parts.append(f"due {item['deadline']}")
-            lines.append(" ".join(parts))
-        return _with_raw_output("Todos:\n" + "\n".join(lines), result)
+                    line += f" due {item['deadline']}"
+            lines.append(line)
+        return "Todos:\n" + "\n".join(lines)
 
     if action == "create":
         todo = result.get("todo") or {}
         message = f"Added todo '{todo.get('title', 'Untitled')}'."
         if todo.get("deadline"):
             message += f" Due {todo['deadline']}."
-        return _with_raw_output(message, result)
+        if todo.get("priority"):
+            message += f" Marked as {todo['priority'].capitalize()} priority."
+        return message
 
     if action == "update":
         todo = result.get("todo") or {}
         message = f"Updated todo '{todo.get('title', 'Untitled')}'."
+        updates: List[str] = []
         if todo.get("deadline"):
-            message += f" Due {todo['deadline']}."
-        return _with_raw_output(message, result)
+            updates.append(f"deadline set to {todo['deadline']}")
+        if todo.get("status") == "completed":
+            updates.append("marked as completed")
+        priority_label = _format_priority_label(todo.get("priority"))
+        if priority_label:
+            updates.append(f"priority {priority_label.lower()}")
+        if updates:
+            message += " " + ", ".join(updates).capitalize() + "."
+        return message
 
     if action == "delete":
-        title = result.get("id", "todo")
-        return _with_raw_output(f"Removed todo '{title}'.", result)
+        if result.get("deleted"):
+            return f"Deleted todo '{result.get('id')}'."
+        return result.get("message", "Todo delete failed.")
 
-    return _with_raw_output("Todo request completed.", result)
+    return result.get("message", "Todo action completed.")
 
 
 def _normalize_status(raw_status: Any) -> str:
@@ -439,10 +506,16 @@ def _extract_title(payload: Dict[str, Any]) -> str:
 
     message = payload.get("message")
     if isinstance(message, str):
-        title = _extract_title_from_message(message)
-        if title:
-            return title
+        inferred = _extract_title_from_message(message)
+        if inferred:
+            return inferred
     return ""
+
+
+def _sanitize_title_candidate(text: str) -> str:
+    cleaned = _strip_known_prefixes(text)
+    cleaned = _strip_trailing_modifiers(cleaned)
+    return cleaned
 
 
 def _extract_deadline_from_fields(payload: Dict[str, Any]) -> Tuple[Optional[str], bool, bool]:
@@ -453,7 +526,7 @@ def _extract_deadline_from_fields(payload: Dict[str, Any]) -> Tuple[Optional[str
         provided = True
         if raw_value is None:
             return None, provided, True
-        text = str(raw_value).strip()
+        text = _normalize_deadline_text(str(raw_value))
         if not text:
             return None, provided, True
         parsed = parse_date_hint(text)
@@ -467,13 +540,18 @@ def _extract_deadline_from_message(payload: Dict[str, Any]) -> Optional[str]:
     message = payload.get("message")
     if not isinstance(message, str):
         return None
+    iso_match = _ISO_DATE_PATTERN.search(message)
+    if iso_match:
+        parsed = parse_date_hint(_normalize_deadline_text(iso_match.group(0)))
+        if parsed:
+            return parsed.isoformat()
     for pattern in (_DATE_PATTERN, _DATE_TEXT_PATTERN):
         for match in pattern.finditer(message):
-            parsed = parse_date_hint(match.group(0))
+            parsed = parse_date_hint(_normalize_deadline_text(match.group(0)))
             if parsed:
                 return parsed.isoformat()
     for token in re.split(r"\s+", message):
-        parsed = parse_date_hint(token)
+        parsed = parse_date_hint(_normalize_deadline_text(token))
         if parsed:
             return parsed.isoformat()
     return None
@@ -488,25 +566,157 @@ def _extract_notes_from_message(payload: Dict[str, Any]) -> Optional[List[str]]:
 
 
 def _extract_title_from_message(message: str) -> Optional[str]:
-    title = extract_title_from_text(message)
-    if title:
-        return _clean_command_prefix(title)
+    if not message:
+        return None
+    text = message.strip()
+    if not text:
+        return None
+
+    quoted = extract_title_from_text(text)
+    if quoted:
+        candidate = _sanitize_title_candidate(quoted)
+        if candidate:
+            return candidate
+
+    for pattern in _TITLE_KEYWORD_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            candidate = _sanitize_title_candidate(match.group(1).strip())
+            if candidate:
+                return candidate
+
+    if ":" in text:
+        before, after = text.split(":", 1)
+        if any(token in before.lower() for token in ("todo", "task", "form", "item")):
+            candidate = _sanitize_title_candidate(after.strip())
+            if candidate:
+                return candidate
+
+    cleaned = _sanitize_title_candidate(text)
+    return cleaned or None
+
+
+def _strip_known_prefixes(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    changed = True
+    while changed:
+        changed = False
+        for pattern in _TITLE_PREFIX_PATTERNS:
+            new_value = pattern.sub("", cleaned, count=1).strip()
+            if new_value != cleaned:
+                cleaned = new_value
+                changed = True
+    return cleaned
+
+
+_DEADLINE_HINT_PATTERN = re.compile(
+    r"\b(today|tonight|tomorrow|mandag|tirsdag|onsdag|torsdag|fredag|lørdag|søndag|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|next|på|i)\b|\d",
+    re.IGNORECASE,
+)
+
+_TRAILING_PRIORITY_PATTERNS = [
+    re.compile(r",?\s*(?:and\s+)?mark\s+it\s+as\s+.+$", re.IGNORECASE),
+    re.compile(r",?\s*(?:and\s+)?mark\s+as\s+.+$", re.IGNORECASE),
+    re.compile(r",?\s*(?:and\s+)?make\s+it\s+.+$", re.IGNORECASE),
+    re.compile(r",?\s*(?:and\s+)?set\s+it\s+.+$", re.IGNORECASE),
+]
+
+
+def _strip_trailing_modifiers(text: str) -> str:
+    cleaned = text.strip(" \t\n\r\"'()")
+    if not cleaned:
+        return ""
+
+    match = re.search(r",?\s*(?:and\s+)?(due|deadline|by)\s+(.+)$", cleaned, re.IGNORECASE)
+    if match and _DEADLINE_HINT_PATTERN.search(match.group(2)):
+        cleaned = cleaned[: match.start()].rstrip(" ,.;:-")
+
+    for pattern in _TRAILING_PRIORITY_PATTERNS:
+        m = pattern.search(cleaned)
+        if m:
+            cleaned = cleaned[: m.start()].rstrip(" ,.;:-")
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
+    return cleaned
+
+
+def _extract_priority(payload: Dict[str, Any]) -> Optional[str]:
+    if "priority" in payload:
+        normalized = _normalize_priority(payload.get("priority"))
+        if normalized:
+            return normalized
+    message = payload.get("message")
+    if isinstance(message, str):
+        return _priority_from_message(message)
     return None
 
 
-def _clean_command_prefix(text: str) -> str:
-    lowered = text.lower()
-    prefixes = [
-        "remember",
-        "add todo",
-        "todo",
-        "add task",
-        "create todo",
-    ]
-    for prefix in prefixes:
-        if lowered.startswith(prefix):
-            return text[len(prefix) :].strip(" :,-")
-    return text.strip()
+def _priority_from_message(message: str) -> Optional[str]:
+    lowered = message.lower()
+    for keyword, normalized in _PRIORITY_MAP.items():
+        if " " in keyword:
+            if keyword in lowered:
+                return normalized
+        else:
+            if re.search(rf"\b{re.escape(keyword)}\b", lowered):
+                return normalized
+    return None
+
+
+def _normalize_priority(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    return _PRIORITY_MAP.get(text) or _priority_from_message(text)
+
+
+def _coerce_priority(value: Any) -> Optional[str]:
+    return _normalize_priority(value)
+
+
+def _format_priority_label(priority: Optional[str]) -> Optional[str]:
+    if not priority:
+        return None
+    label_map = {
+        "high": "High",
+        "medium": "Medium",
+        "normal": "Normal",
+        "low": "Low",
+    }
+    return label_map.get(priority)
+
+
+def _normalize_notes(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return items or None
+    text = str(value).strip()
+    if not text:
+        return None
+    return [text]
+
+
+def _coerce_notes(value: Any) -> Optional[List[str]]:
+    result = _normalize_notes(value)
+    return result
+
+
+def _clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned: Dict[str, Any] = {}
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        cleaned[key] = value
+    return cleaned
 
 
 def _normalize_deadline(deadline: Optional[str]) -> Optional[str]:
@@ -545,39 +755,8 @@ def _sort_key_for_entry(entry: TodoItem) -> Tuple[int, date, str]:
     return (has_deadline, deadline_date, entry.title.lower())
 
 
-def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = True) -> str:
-    if not include_raw:
-        return message
-    raw = json.dumps(payload, indent=2, ensure_ascii=False)
-    return f"{message}\nRaw:\n{raw}"
-
-
-def _normalize_notes(value: Any) -> Optional[List[str]]:
-    if value is None:
-        return None
-    if isinstance(value, list):
-        items = [str(item).strip() for item in value if str(item).strip()]
-        return items or None
-    text = str(value).strip()
-    if not text:
-        return None
-    return [text]
-
-
-def _coerce_notes(value: Any) -> Optional[List[str]]:
-    result = _normalize_notes(value)
-    return result
-
-
-def _clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
-    cleaned: Dict[str, Any] = {}
-    for key, value in data.items():
-        if value is None:
-            continue
-        if isinstance(value, (list, dict)) and not value:
-            continue
-        cleaned[key] = value
-    return cleaned
+def _normalize_deadline_text(text: str) -> str:
+    return str(text or "").strip().strip(".,;")
 
 
 __all__ = ["run", "format_todo_response", "TodoStore", "TodoItem"]

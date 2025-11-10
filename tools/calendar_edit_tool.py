@@ -10,8 +10,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.json_storage import atomic_write_json, read_json
+from core.text_parsing import parse_datetime_hint
 
 _DEFAULT_STORAGE_PATH = Path("data_pipeline/calendar.json")
+_ACTION_ALIASES = {
+    "list_events": "list",
+    "list_event": "list",
+    "events_list": "list",
+}
 
 
 @dataclass
@@ -193,7 +199,8 @@ class CalendarStore:
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Entry point for calendar operations."""
 
-    action = str(payload.get("action", "list")).strip().lower() or "list"
+    action_raw = str(payload.get("action", "list")).strip().lower()
+    action = _ACTION_ALIASES.get(action_raw, action_raw or "list")
     store = CalendarStore()
 
     if action == "list":
@@ -361,10 +368,16 @@ def format_calendar_response(result: Dict[str, Any]) -> str:
 
 
 def _parse_datetime(value: str) -> datetime:
+    value = (value or "").strip()
+    if not value:
+        raise ValueError("Invalid datetime ''. Provide a timestamp like 01/02/2025 09:00.")
     try:
         return _parse_iso(value)
-    except ValueError as exc:
-        raise ValueError(f"Invalid datetime '{value}'. Use ISO 8601 format.") from exc
+    except ValueError:
+        hint = parse_datetime_hint(value)
+        if hint:
+            return hint
+        raise ValueError(f"Invalid datetime '{value}'. Use formats like 01/02/2025 09:00 or ISO 8601.") from None
 
 
 def _parse_iso(value: str) -> datetime:

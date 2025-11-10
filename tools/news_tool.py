@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -22,6 +23,38 @@ _NEWS_SEARCH_LIMIT = int(os.getenv("NEWS_SEARCH_LIMIT", "5"))
 _NEWS_SEARCH_DAYS = int(os.getenv("NEWS_SEARCH_DAYS", "3"))
 _NEWS_LOCAL_DAYS = int(os.getenv("NEWS_LOCAL_DAYS", str(_NEWS_SEARCH_DAYS)))
 _NEWS_USER_AGENT = os.getenv("NEWS_USER_AGENT", "Mozilla/5.0")
+_TOPIC_SUFFIX_KEYWORDS = ("news", "headlines", "headline", "stories", "updates", "update")
+_TOPIC_LEADING_PHRASES = [
+    "catch me up on",
+    "catch me up",
+    "update me on",
+    "give me the latest",
+    "give me latest",
+    "give me",
+    "show me the latest",
+    "show me latest",
+    "show me",
+    "bring me up to speed on",
+    "bring me up to speed",
+    "i need",
+    "need",
+    "i want",
+    "want",
+    "can you give me",
+    "please give me",
+    "please show me",
+    "please",
+    "tell me about",
+    "tell me",
+    "any",
+    "some",
+    "the latest",
+    "latest",
+    "current",
+    "recent",
+    "top",
+]
+_TOPIC_PREPOSITIONS = ("about", "on", "regarding", "around", "over")
 
 
 # ---------------------------------------------------------------------------
@@ -259,8 +292,10 @@ def _filter_allowed_sources(items: List[Dict[str, str]]) -> List[Dict[str, str]]
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Return curated headlines for the requested ``topic``."""
 
-    topic_raw = str(payload.get("topic") or payload.get("message") or "").strip()
-    topic_display = topic_raw or "top stories"
+    message_text = payload.get("message")
+    topic_raw = str(payload.get("topic") or "").strip()
+    topic_display = topic_raw or _clean_topic_query(message_text) or (str(message_text).strip() if isinstance(message_text, str) else "")
+    topic_display = topic_display or "top stories"
     limit = news_search_limit()
     language_override = payload.get("language")
     if isinstance(language_override, str):
@@ -310,7 +345,50 @@ def format_news_list(result: Dict[str, Any]) -> str:
         title = story.get("title", "Untitled story")
         url = story.get("url", "#")
         if url:
-            lines.append(f"- {title} ({url})")
+            lines.append(f"- [{title}]({url})")
         else:
             lines.append(f"- {title}")
     return "\n".join(lines)
+
+
+# Keep this sanitizer so topic searches never include the entire user prompt.
+# Removing it reintroduces noisy RSS/API queries and degrades precision.
+def _clean_topic_query(message: Any) -> str:
+    if not isinstance(message, str):
+        return ""
+    text = message.strip()
+    if not text:
+        return ""
+
+    stripped = text.strip(" \t\n\r?.!\"'“””")
+    lowered = stripped.lower()
+    for keyword in _TOPIC_SUFFIX_KEYWORDS:
+        idx = lowered.rfind(keyword)
+        if idx == -1:
+            continue
+        before = stripped[:idx].strip()
+        after = stripped[idx + len(keyword):].strip()
+        candidate = after or before
+        candidate = _strip_topic_leading(candidate)
+        if candidate:
+            return candidate
+    return _strip_topic_leading(stripped)
+
+
+def _strip_topic_leading(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = text.strip(" \t\n\r,.!?\"'")
+    lowered = cleaned.lower()
+    for phrase in sorted(_TOPIC_LEADING_PHRASES, key=len, reverse=True):
+        if lowered.startswith(phrase):
+            cleaned = cleaned[len(phrase):].lstrip(" \t\n\r,.!?\"'")
+            lowered = cleaned.lower()
+            break
+    lowered = cleaned.lower()
+    for prep in _TOPIC_PREPOSITIONS:
+        if lowered.startswith(prep + " "):
+            cleaned = cleaned[len(prep):].lstrip(" \t\n\r,.!?\"'")
+            lowered = cleaned.lower()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()

@@ -17,8 +17,8 @@ from core.learning_logger import LearningLogger, ReviewItem, TurnRecord
 from core.llm_router import LLMRouter
 from core.nlu_service import NLUResult, NLUService
 from core.tool_registry import ToolRegistry
-from tools.calendar_edit import format_calendar_response
-from tools.kitchen_tips import format_kitchen_tips_response
+from tools.calendar_edit_tool import format_calendar_response
+from tools.kitchen_tips_tool import format_kitchen_tips_response
 from tools.news_tool import format_news_list
 from tools.todo_list_tool import format_todo_response
 from tools.app_guide_tool import format_app_guide_response

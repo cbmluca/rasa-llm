@@ -36,6 +36,24 @@ def test_planetary_name_does_not_register_as_city():
     assert not service.is_confident(result)
 
 
+def test_complete_task_updates_todo():
+    service = _service()
+    result = service.parse("Complete the task to Check cellar")
+
+    assert result.intent == "todo_list"
+    assert result.entities["action"] == "update"
+    assert result.entities["status"] == "completed"
+    assert result.entities["target_title"].lower() == "check cellar"
+
+
+def test_list_my_todos_is_detected():
+    service = _service()
+    result = service.parse("List my todos.")
+
+    assert result.intent == "todo_list"
+    assert result.entities["action"] == "list"
+
+
 class _StubClassifier:
     def __init__(self, prediction: Optional[ClassifierPrediction]) -> None:
         self.prediction = prediction
