@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from core.command_parser import parse_command
 from tools import calendar_edit_tool as calendar_edit
 
 

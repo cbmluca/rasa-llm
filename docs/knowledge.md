@@ -1,109 +1,34 @@
-# Tier‑1 Assistant Knowledge Sheet
+# Notes for Tier‑1 Assistant
 
-## Quick Facts
-- Runtime is pure Python: CLI entrypoint `python -m app.main` (or `./start orch`).
-- Message flow: `NLUService` (rules/entities) → `Orchestrator` → tools or `LLMRouter` fallback.
-- Observability: `LearningLogger` appends `TurnRecord` and `ReviewItem` JSONL rows (`logs/turns.jsonl`, `data_pipeline/nlu_training_bucket/pending.jsonl`), scrubs PII by default, and rotates files when size limits are reached.​:codex-file-citation[codex-file-citation]{line_range_start=177 line_range_end=256 path=core/orchestrator.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/core/orchestrator.py#L177-L256"}​​:codex-file-citation[codex-file-citation]{line_range_start=142 line_range_end=253 path=core/learning_logger.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/core/learning_logger.py#L142-L253"}​
-- Core utilities live under `app/`, `core/`, `tools/`, and are covered by pytest (`tests/`).
-- `.env` values are auto-loaded via `python-dotenv` when available; keep secrets there and out of git.
-- Legacy Rasa project is archived in `legacy_rasa/` for reference only.
+## Quick Start
+- Activate `.venv` (alias `act` → `source .venv/bin/activate`).
+- CLI entry `./start orch`; web UI `./start web` (FastAPI + static dashboard).
+- Flow reminder: shared parser (`core/parsers/*`) → `NLUService` → `Orchestrator` → Tier‑3 tool or `LLMRouter` fallback. Logs land in `logs/turns.jsonl`, review queue in `data_pipeline/nlu_training_bucket/`.
+- Tool stores live under `data_pipeline/{todos,kitchen_tips,calendar,app_guide}.json`; helpers in `core/json_storage.py` keep writes atomic.
 
-## Runbook
-1. `cd ~/rasa-llm-bot`
-2. Activate virtualenv (alias `act` ⇒ `source .venv/bin/activate`).
-3. Launch CLI: `./start orch` (forwards to `python -m app.main`).
-4. Type messages; exit with `quit`/`exit`.
+## Testing checklist
+1. Parser coverage: `pytest tests/testing_parsers/test_command_parser.py`.
+2. Tool/stateful coverage: `pytest tests/testing_tools/test_todo_list_tool.py tests/testing_tools/test_calendar_edit_tool.py`.
+3. Kitchen/App integration: `pytest tests/testing_tools/test_kitchen_app_tool.py`.
+4. Domain suites when touched: `tests/test_learning_logger.py`, `tests/test_news_service.py`, `tests/test_nlu_service.py`, `tests/test_web_api.py`.
+5. Mention each command/output in your status update so reviewers know which coverage ran.
 
-### Shutting Down
-- Ctrl‑C from the CLI, then `deactivate` to drop the virtualenv.
+## Eval habits
+- Run `./start eval --config config/eval_prompts.yml` whenever prompts/parsers change. `--include-synthetic --auto-threshold 20` prevents spam runs.
+- Add any fixed regression prompt to `config/eval_prompts.yml` so the harness catches it next time.
+- Only retrain the classifier (`python -m app.train_intent_classifier ...`) after reviewing the eval report and ensuring enough labeled prompts exist.
 
-### Testing
-- Run unit tests with `pytest`; mention the command and output in status updates.
-- Tests now live under focused folders:
-  - `tests/testing_parsers/` holds the natural-language parser suite (currently `test_command_parser.py`). Run this whenever you touch `core/parsers/*` or shared parser utilities.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=200 path=tests/testing_parsers/test_command_parser.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tests/testing_parsers/test_command_parser.py#L1-L200"}
-  - `tests/testing_tools/` contains tool+stateful tests. Run these in sequence to ensure parser payloads still exercise the JSON-backed stores correctly:
-    1. `pytest tests/testing_tools/test_todo_list_tool.py tests/testing_tools/test_calendar_edit_tool.py`
-    2. `pytest tests/testing_tools/test_kitchen_app_tool.py`
-- Broader suites—`tests/test_learning_logger.py`, `tests/test_news_service.py`, `tests/test_nlu_service.py`, Tier‑5 coverage in `tests/test_web_api.py`—should still expand alongside behaviour changes and be run when their domains change.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=86 path=tests/test_learning_logger.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tests/test_learning_logger.py#L1-L86"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=60 path=tests/test_news_service.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tests/test_news_service.py#L1-L60"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=142 path=tests/test_web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tests/test_web_api.py#L1-L142"}
+## Web UI reminders
+- `./start web` launches FastAPI (`app/web_api.py`). Default host/port configurable via `WEB_UI_HOST/PORT` in `app/config.py`.
+- `POST /api/chat` mirrors the CLI. `/api/data/{todos|kitchen_tips|calendar|app_guide}` proxies straight into the Tier‑3 tools so validation stays centralized.
+- Labeling tables talk to `/api/logs/{pending,label,import,export}`; all paths reuse the same dedupe logic as the CLI tooling.
 
-### Evaluation Harness (prompt quality gate)
-- Run `./start eval --config config/eval_prompts.yml` before shipping prompt-related changes; results are written to `reports/eval_results.json`.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=220 path=app/eval_suite.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/eval_suite.py#L1-L220"}
-- Automation helper: `./start eval --include-synthetic --auto-threshold 20` counts labeled prompts in `data_pipeline/nlu_training_bucket/labeled_prompts.jsonl` and only runs when at least 20 new labels landed since the previous run (`reports/eval_state.json`).
-- Manual responsibilities: (1) review mismatches before merging, (2) keep `config/eval_prompts.yml` updated whenever you fix a bug, and (3) trigger classifier retraining with `python -m app.train_intent_classifier ...` once enough high-quality labels exist.
+## Parser/Tool architecture
+- Parser logic is split between shared helpers (`core/parser_utils/text.py`, `core/parser_utils/datetime.py`) and per-tool modules (`core/parsers/weather.py`, `news.py`, `todo.py`, `kitchen.py`, `calendar.py`, `app_guide.py`). `core/command_parser.py` is just the router.
+- Tool integration tests now call `parse_command` + tool `run()` so prompts like “add a todo reminding me…” stay exercised end-to-end.
+- Whenever parser or tool behaviour changes, update the relevant module, extend the test file in `tests/testing_parsers/` or `tests/testing_tools/`, and rerun the suites listed above.
 
-
-## Web UI Runbook (Tier‑5)
-1. Install the FastAPI stack (`fastapi`, `uvicorn`) inside the project virtualenv. These are pure-Python dependencies, so `pip install fastapi uvicorn` is sufficient.
-2. Start the API + dashboard with `./start web` (or `python -m app.web_api`). Defaults bind to `WEB_UI_HOST=127.0.0.1`, `WEB_UI_PORT=9000`, and can be overridden via environment variables exposed in `app/config.py` (`WEB_UI_ENABLED`, `WEB_UI_HOST`, `WEB_UI_PORT`).​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=278 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L1-L278"}​​:codex-file-citation[codex-file-citation]{line_range_start=180 line_range_end=220 path=app/config.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/config.py#L180-L220"}
-3. Open `http://localhost:9000/` to access the dashboard (`web/static/index.html` + `app.js`). The left column mirrors the CLI chat loop via `POST /api/chat`, while the right column surfaces pending/classifier/labeled logs, exports/import controls, and Tier‑3 data stores.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=236 path=web/static/index.html git_url="https://github.com/cbmluca/rasa-llm/blob/main/web/static/index.html#L1-L236"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=558 path=web/static/app.js git_url="https://github.com/cbmluca/rasa-llm/blob/main/web/static/app.js#L1-L558"}
-4. Inline labeling workflow:
-   - Pending table pulls from `data_pipeline/nlu_training_bucket/pending.jsonl` via `/api/logs/pending`. Each row includes a dropdown of registered intents and “Save” button to append to `labeled_prompts.jsonl` by calling `/api/logs/label`, plus a “Flag” toggle for “needs new tool” triage stored client-side.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=200 path=core/data_views.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/core/data_views.py#L1-L200"}​​:codex-file-citation[codex-file-citation]{line_range_start=60 line_range_end=160 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L60-L160"}​​:codex-file-citation[codex-file-citation]{line_range_start=120 line_range_end=230 path=web/static/app.js git_url="https://github.com/cbmluca/rasa-llm/blob/main/web/static/app.js#L120-L230"}
-   - Export latest prompts from the same view (`POST /api/logs/export`) to generate per-intent CSV/JSON batches served under `/exports/...`. Upload reviewer CSV/JSON through `/api/logs/import` to dedupe + append back into the labeled store.​:codex-file-citation[codex-file-citation]{line_range_start=160 line_range_end=220 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L160-L220"}​​:codex-file-citation[codex-file-citation]{line_range_start=250 line_range_end=360 path=web/static/app.js git_url="https://github.com/cbmluca/rasa-llm/blob/main/web/static/app.js#L250-L360"}
-5. Data snapshots: the todos, kitchen tips, calendar, and App Guide panels call `/api/data/{store}` for reads and POST the existing tool payloads for mutations, so validation stays inside the Tier‑3 tool implementations. Use the inline forms (add todo, add tip, add event, save section) or table buttons (complete/delete) to exercise the same JSON-backed stores under `data_pipeline/`.​:codex-file-citation[codex-file-citation]{line_range_start=200 line_range_end=278 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L200-L278"}​​:codex-file-citation[codex-file-citation]{line_range_start=360 line_range_end=558 path=web/static/app.js git_url="https://github.com/cbmluca/rasa-llm/blob/main/web/static/app.js#L360-L558"}
-
-### API Reference (Tier‑5)
-| Endpoint | Description |
-| --- | --- |
-| `POST /api/chat` | Wraps `Orchestrator.handle_message_with_details()` and returns `{reply, extras, tool, latency_ms}` for the UI chat console.​:codex-file-citation[codex-file-citation]{line_range_start=60 line_range_end=125 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L60-L125"} |
-| `GET /api/logs/pending` / `GET /api/logs/classifier` / `GET /api/logs/labeled` | Paginated slices built on `core.data_views` helpers to inspect pending prompts, classifier drift, and reviewer history.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=200 path=core/data_views.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/core/data_views.py#L1-L200"}​​:codex-file-citation[codex-file-citation]{line_range_start=125 line_range_end=180 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L125-L180"} |
-| `POST /api/logs/label` / `POST /api/logs/import` / `POST /api/logs/export` | Inline labeling, CSV/JSON import, and deduped export workflows shared with the CLI.​:codex-file-citation[codex-file-citation]{line_range_start=160 line_range_end=220 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L160-L220"} |
-| `GET/POST /api/data/{todos|kitchen_tips|calendar|app_guide}` | Runs the exact Tier‑3 tools (todo_list, kitchen_tips, calendar_edit, app_guide) so the UI can list or mutate JSON stores without bypassing validation.​:codex-file-citation[codex-file-citation]{line_range_start=200 line_range_end=260 path=app/web_api.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/web_api.py#L200-L260"} |
-
-## Configuration Highlights
-- `app/config.py` handles defaults (NLU confidence 0.65, enabled tools, logging paths, redaction toggles, rotation limits) and loads `.env` overrides.​:codex-file-citation[codex-file-citation]{line_range_start=19 line_range_end=162 path=app/config.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/config.py#L19-L162"}​
-- `core/nlu_service.py` delegates every utterance to the shared command parser so weather/news/todo/kitchen/calendar payloads stay consistent before any LLM fallback.
-- `core/llm_router.py` uses OpenAI Python v1 API; replies with guidance if `OPENAI_API_KEY` is missing.
-- `tools/news_tool.py` now wraps Google News RSS + NewsAPI with retry-friendly HTTP helpers.
-- Tools:
-  - `tools/weather_tool.py` (Open‑Meteo hourly+current, time-aware summaries).
-  - `tools/news_tool.py` (wraps NewsAPI + Google RSS helpers directly).
-  - `tools/todo_list_tool.py` (CRUD + Danish deadline parsing, countdown metadata, formatted + raw JSON output for verification).​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=420 path=tools/todo_list_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/todo_list_tool.py#L1-L420"}​
-  - `tools/kitchen_tips_tool.py` (read-only tips with optional reference link and raw JSON echo).​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=219 path=tools/kitchen_tips_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/kitchen_tips_tool.py#L1-L219"}​
-  - `tools/calendar_edit_tool.py` (add/update/delete calendar events with optional location/link).​:codex-file-citation[codex-file-citation]{line_range_start=32 line_range_end=360 path=tools/calendar_edit_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/calendar_edit_tool.py#L32-L360"}​
-
-## Data & Extras
-- Tier‑3 data stores sit under `data_pipeline/`: `app_guide.json`, `todos.json`, `kitchen_tips.json`, `calendar.json`. Every read/write flows through `core.json_storage` for atomic persistence.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=41 path=core/json_storage.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/core/json_storage.py#L1-L41"}​
-- Manage the knowledge base via `AppGuideStore` (list/get/upsert/delete) or the new `tools.app_guide_tool` wrapper exposed to the orchestrator.​:codex-file-citation[codex-file-citation]{line_range_start=37 line_range end=140 path=knowledge/app_guide.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/knowledge/app_guide.py#L37-L140"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range end=120 path=tools/app_guide_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/app_guide_tool.py#L1-L120"}​
-- Todo reminders accept Danish-style dates (e.g., `1/7/2026`, `1 juli 2026`) from structured fields (`deadline`, `due`, `date`, `reminder`) or free-form `message`; stored items record `deadline_days_until` so `list todos` surfaces close deadlines first.​:codex-file-citation[codex-file-citation]{line_range_start=43 line_range_end=260 path=tools/todo_list_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/todo_list_tool.py#L43-L260"}​​:codex-file-citation[codex-file-citation]{line_range_start=34 line_range_end=106 path=tests/test_todo_list_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tests/test_todo_list_tool.py#L34-L106"}​
-- Kitchen tips now allow optional `link` references, and calendar events store optional `location`/`link` fields; all tool responses echo the raw JSON payload so testers can confirm persisted data without opening files.​:codex-file-citation[codex-file-citation]{line_range_start=27 line_range_end=219 path=tools/kitchen_tips_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/kitchen_tips_tool.py#L27-L219"}​​:codex-file-citation[codex-file-citation]{line_range_start=142 line_range_end=360 path=tools/calendar_edit_tool.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/tools/calendar_edit_tool.py#L142-L360"}​
-- No Rasa training data is used in Tier‑1. Historic files (`data/`, `domain.yml`, `config.yml`, etc.) now live in `legacy_rasa/`.
-- Tier‑2 logging produces data under `logs/` and `data_pipeline/nlu_training_bucket/`; tune `LOG_REDACTION_ENABLED`, `LOG_REDACTION_PATTERNS`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` as needed.​:codex-file-citation[codex-file-citation]{line_range_start=108 line_range_end=162 path=app/config.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/config.py#L108-L162"}​
-
-## Development Practices
-- Tier roadmap (see `AGENTS.md`) is sequential: do not pull higher-tier tasks early without user approval.
-- Every feature must ship with pytest coverage; report the command/output in status updates.
-- Keep `AGENTS.md` synchronized with architectural or tooling changes.
-
-## Prompt Labeling Workflow
-1. Export pending prompts grouped by parser intent with `python -m app.admin_scripts export-prompts --format csv --dedupe`; the script reads `data_pipeline/nlu_training_bucket/pending.jsonl`, hashes normalized text to drop duplicates, and creates one CSV/JSON file per intent under `data_pipeline/nlu_training_bucket/exports/`.​:codex-file-citation[codex-file-citation]{line_range_start=56 line_range_end=110 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L56-L110"}​
-2. Reviewers add both `reviewer_intent` and (when applicable) `reviewer_action` columns (matching `config/intents.yml`) to the exported rows, then push the annotations back into `data_pipeline/nlu_training_bucket/labeled_prompts.jsonl` via `python -m app.admin_scripts import-labels --input exports/todo_list.csv --dedupe`.​:codex-file-citation[codex-file-citation]{line_range_start=107 line_range_end=187 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L107-L187"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=22 path=config/intents.yml git_url="https://github.com/cbmluca/rasa-llm/blob/main/config/intents.yml#L1-L22"}​
-3. Each appended label record stores `text`, `parser_intent`, `reviewer_intent`, and a UTC timestamp so the training pipeline has deterministic provenance.​:codex-file-citation[codex-file-citation]{line_range_start=119 line_range_end=167 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L119-L167"}​
-4. Retrain the classifier whenever at least 50 new labeled prompts have landed or four weeks pass—whichever comes first—and record the resulting metrics/hash in the Tier‑4 changelog (reports/intent_classifier.json once the training script lands). This cadence keeps model drift visible while the dataset grows.
-
-### Train the Classifier
-- Run `python -m app.train_intent_classifier --labeled-path data_pipeline/nlu_training_bucket/labeled_prompts.jsonl --model-path models/intent_classifier.pkl --report-path reports/intent_classifier.json --min-class-samples 10`. The script loads the canonical intent list, stratifies the split, trains TF‑IDF + LogisticRegression, prints accuracy/macro-F1, writes the pickled model, and stores metrics plus confusion matrix in `reports/intent_classifier.json` for drift tracking.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=212 path=app/train_intent_classifier.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/train_intent_classifier.py#L1-L212"}​
-- The report captures `data_hash`, per-class counts, and warnings when any intent has fewer than the configured examples, so reviewers know when to gather more labels before trusting the model.
-
-### Deploy the Classifier
-- Copy the latest `models/intent_classifier.pkl` into the runtime (or point `CLASSIFIER_MODEL_PATH` at a different file) and adjust `CLASSIFIER_MIN_SCORE` if you need a stricter or looser gate; `app/main.py` wires these config values into `IntentClassifier` and `NLUService`.​:codex-file-citation[codex-file-citation]{line_range_start=31 line_range_end=186 path=app/config.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/config.py#L31-L186"}​​:codex-file-citation[codex-file-citation]{line_range_start=5 line_range_end=55 path=app/main.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/main.py#L5-L55"}​
-- When the model file is missing (e.g., fresh checkout) the classifier silently no-ops, so deploying a newer pickle is just a file copy + optional env var change—no code edits required.
-
-### Review Classifier Predictions
-- `python -m app.admin_scripts review-classifier --intent todo_list --limit 20` scans `logs/turns.jsonl` for turns whose `extras.invocation_source == "classifier"` and prints any that failed a tool call or have a reviewer label in `labeled_prompts.jsonl` that disagrees with the classifier; this report feeds drift investigations and future deterministic rule suggestions.​:codex-file-citation[codex-file-citation]{line_range_start=188 line_range_end=205 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L188-L205"}​
-
-### 10-Prompt Smoke Test (CLI)
-1. **Export a small batch** – Run `python -m app.admin_scripts export-prompts --format csv --dedupe --output-dir data_pipeline/nlu_training_bucket/smoke_exports`. This groups pending prompts by parser intent and drops near-duplicates.​:codex-file-citation[codex-file-citation]{line_range_start=56 line_range_end=110 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L56-L110"}​
-2. **Trim to ten rows** – Open the CSV for the intent you want to test (e.g., `smoke_exports/todo_list.csv`), keep just ten representative prompts, and add `reviewer_intent` (and optional `reviewer_action`) columns pointing at entries from `config/intents.yml`. Save this edited file as something like `smoke_exports/todo_list_first10.csv`.
-3. **Import the labels** – `python -m app.admin_scripts import-labels --input smoke_exports/todo_list_first10.csv --format csv --dedupe --output data_pipeline/nlu_training_bucket/labeled_prompts.jsonl` appends the annotations with timestamps so they’re ready for training.​:codex-file-citation[codex-file-citation]{line_range_start=107 line_range_end=187 path=app/admin_scripts.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/admin_scripts.py#L107-L187"}​​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=22 path=config/intents.yml git_url="https://github.com/cbmluca/rasa-llm/blob/main/config/intents.yml#L1-L22"}​
-4. **Train with relaxed settings** – Run `python -m app.train_intent_classifier --labeled-path data_pipeline/nlu_training_bucket/labeled_prompts.jsonl --model-path models/smoke_intent_classifier.pkl --report-path reports/smoke_intent_classifier.json --min-class-samples 1 --test-size 0.5`. The script will warn about tiny class counts (expected for only ten prompts) but still produce a pickle/report so you can smoke-test the runtime.​:codex-file-citation[codex-file-citation]{line_range_start=105 line_range_end=212 path=app/train_intent_classifier.py git_url="https://github.com/cbmluca/rasa-llm/blob/main/app/train_intent_classifier.py#L105-L212"}​
-5. **Sanity-check in the CLI** – Point `CLASSIFIER_MODEL_PATH` at `models/smoke_intent_classifier.pkl`, run `./start orch`, and issue a test utterance that should hit the labeled intent to confirm the classifier path fires before the router.
-
-## Future Work
-- **Security & Data Governance backlog**: track upcoming security reviews (prompt storage, auth, data retention) here until the dedicated tier ships; ideas incubate in this section before AGENTS.md is updated with concrete modules.
-- **Tier 9 placeholder**: IoT triggers, speech (TTS/STT), smart-home integrations, and advanced RAG upgrades remain backlog concepts. They graduate from this list only after specs solidify and the corresponding code is stubbed in the active tiers.
-
-## Tier Vision Snapshot
-- **Tier 1 – Baseline Runtime**: Fast CLI loop with command-parser-driven tools plus ChatGPT fallback.
-- **Tier 2 – Logging & Observability**: Structured logs + review queue now ship in Tier‑1; focus is expanding metrics/visualization next.
-- **Tier 3 – Tool Expansion & Knowledge**: Todos, calendar, kitchen tips, and editable knowledge base built on atomic JSON stores.
-- Higher tiers (4–8) remain future roadmap items (self-improving NLU, UI, always-on execution, etc.) and only start after the preceding tier completes.
+## Config + storage notes
+- Defaults (NLU threshold, enabled tools, log paths, redaction, web UI host) live in `app/config.py`. Secrets stay in `.env`.
+- `core/learning_logger.py` scrubs PII by default; only disable redaction for local debugging and document the decision.
+- Legacy Rasa bot is still in `legacy_rasa/` for reference but isn’t part of the runtime.

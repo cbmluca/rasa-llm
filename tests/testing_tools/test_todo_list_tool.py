@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from core.command_parser import parse_command
 from tools import todo_list_tool as todo_list
 
 
