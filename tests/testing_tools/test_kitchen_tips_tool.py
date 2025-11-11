@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tools import kitchen_tips
+from tools import kitchen_tips_tool as kitchen_tips
 
 
 def test_kitchen_tips_list_get_search(tmp_path: Path, monkeypatch) -> None:
@@ -52,14 +52,14 @@ def test_kitchen_tips_validation(tmp_path: Path, monkeypatch) -> None:
     search = kitchen_tips.run({"action": "search"})
     assert search["error"] == "missing_query"
 
-def test_kitchen_tips_formatter_includes_raw(tmp_path: Path, monkeypatch) -> None:
+def test_kitchen_tips_formatter_is_clean(tmp_path: Path, monkeypatch) -> None:
     storage_path = tmp_path / "kitchen_tips.json"
     monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
     storage_path.write_text(json.dumps({"tips": []}), encoding="utf-8")
 
     result = kitchen_tips.run({"action": "list"})
     formatted = kitchen_tips.format_kitchen_tips_response(result)
-    assert "Raw:" in formatted
+    assert "Raw:" not in formatted
 
 
 def test_kitchen_tips_create(tmp_path: Path, monkeypatch) -> None:

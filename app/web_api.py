@@ -7,26 +7,33 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import (
+    get_corrected_prompts_path,
     get_labeled_queue_path,
     get_review_queue_path,
     get_turn_log_path,
 )
 from app.main import build_orchestrator
 from core.data_views import (
-    append_label_entry,
+    append_correction_entry,
     append_labels,
+    append_pending_prompt,
     count_jsonl_rows,
+    dedupe_pending_prompts,
+    delete_pending_entry,
     export_pending,
     list_pending_with_hashes,
+    list_recent_pending,
     load_labeled_prompts,
+    load_corrected_prompts,
+    rehydrate_labeled_prompts,
     review_classifier_predictions,
     summarize_pending_queue,
 )
@@ -45,16 +52,28 @@ DATA_STORE_TO_TOOL = {
     "app_guide": {"tool": "app_guide", "list_payload": {"action": "list"}},
 }
 
+TOOL_TO_STORE = {config["tool"]: store_id for store_id, config in DATA_STORE_TO_TOOL.items()}
+STORE_MUTATING_ACTIONS = {
+    "todos": {"create", "update", "delete"},
+    "kitchen_tips": {"create"},
+    "calendar": {"create", "update", "delete"},
+    "app_guide": {"upsert", "delete"},
+}
+
 
 class ChatRequest(BaseModel):
     message: str
 
 
-class LabelPayload(BaseModel):
-    text: str
-    reviewer_intent: str
+class CorrectionPayload(BaseModel):
+    prompt_id: str
+    prompt_text: str
+    tool: str
     parser_intent: str = "nlu_fallback"
+    reviewer_intent: str
     action: Optional[str] = None
+    predicted_payload: Dict[str, Any] = Field(default_factory=dict)
+    corrected_payload: Dict[str, Any]
 
 
 def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
@@ -92,6 +111,7 @@ def create_app(
     *,
     pending_path: Optional[Path] = None,
     labeled_path: Optional[Path] = None,
+    corrected_path: Optional[Path] = None,
     turn_log_path: Optional[Path] = None,
     static_dir: Optional[Path] = None,
     export_dir: Optional[Path] = None,
@@ -99,9 +119,13 @@ def create_app(
     orch = orchestrator or build_orchestrator()
     pending = pending_path or get_review_queue_path()
     labeled = labeled_path or get_labeled_queue_path()
+    corrected = corrected_path or get_corrected_prompts_path()
     turn_log = turn_log_path or get_turn_log_path()
     static_root = static_dir or STATIC_DIR
     exports_root = export_dir or EXPORT_DIR
+
+    rehydrate_labeled_prompts(labeled_path=labeled, pending_path=pending)
+    dedupe_pending_prompts(pending)
 
     static_root.mkdir(parents=True, exist_ok=True)
     exports_root.mkdir(parents=True, exist_ok=True)
@@ -110,6 +134,7 @@ def create_app(
     app.state.orchestrator = orch
     app.state.pending_path = pending
     app.state.labeled_path = labeled
+    app.state.corrected_path = corrected
     app.state.turn_log_path = turn_log
     app.state.static_root = static_root
     app.state.export_root = exports_root
@@ -137,13 +162,32 @@ def create_app(
         if not message:
             raise HTTPException(status_code=400, detail="Message is required.")
         result = app.state.orchestrator.handle_message_with_details(message)
-        return _format_response(result)
+        formatted = _format_response(result)
+        try:
+            pending_result = append_pending_prompt(
+                pending_path=app.state.pending_path,
+                message=message,
+                intent=result.nlu_result.intent,
+                parser_payload=result.nlu_result.entities,
+                confidence=result.nlu_result.confidence,
+                reason=formatted.get("review_reason") or "chat_submission",
+                extras=formatted.get("extras"),
+                tool_name=formatted.get("tool", {}).get("name"),
+            )
+            if pending_result.get("record"):
+                formatted["pending_record"] = pending_result["record"]
+        except Exception:
+            pass
+        return formatted
 
     @app.get("/api/logs/pending")
     def pending_logs(limit: int = 25, page: int = 1) -> Dict[str, Any]:
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
+        for item in items:
+            parser_payload = item.get("parser_payload") or {}
+            item.setdefault("predicted_payload", parser_payload)
         summary = summarize_pending_queue(app.state.pending_path)
         has_more = page * capped_limit < summary.get("total", 0)
         return {
@@ -169,19 +213,71 @@ def create_app(
         records = load_labeled_prompts(app.state.labeled_path, limit=max(1, min(limit, 200)), intent=intent)
         return {"items": records}
 
+    @app.get("/api/logs/corrected")
+    def corrected_logs(limit: int = 25, page: int = 1, intent: Optional[str] = None) -> Dict[str, Any]:
+        capped_limit = max(1, min(limit, 200))
+        page = max(page, 1)
+        data = load_corrected_prompts(
+            app.state.corrected_path,
+            limit=capped_limit,
+            page=page,
+            intent=intent,
+        )
+        return data
+
     @app.post("/api/logs/label")
-    def label_prompt(payload: LabelPayload) -> Dict[str, Any]:
+    def label_prompt(payload: CorrectionPayload) -> Dict[str, Any]:
+        reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
+        corrected_payload = dict(payload.corrected_payload or {})
+        if reviewer_action:
+            corrected_payload["action"] = reviewer_action
+        corrected_payload.setdefault("intent", payload.reviewer_intent)
+        corrected_payload.setdefault("message", payload.prompt_text)
+
+        predicted_payload = dict(payload.predicted_payload or {})
+        updated_stores: List[str] = []
+        tool_result: Optional[Dict[str, Any]] = None
+
+        store_id = TOOL_TO_STORE.get(payload.tool)
+        action_value = str(corrected_payload.get("action") or "").strip().lower()
+        should_mutate = bool(store_id and action_value in STORE_MUTATING_ACTIONS.get(store_id, set()))
+
+        if should_mutate:
+            try:
+                tool_result = app.state.orchestrator.run_tool(payload.tool, corrected_payload)
+            except KeyError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if isinstance(tool_result, dict) and tool_result.get("error"):
+                raise HTTPException(status_code=400, detail=tool_result)
+            updated_stores.append(store_id)  # refresh this tab client-side
+
         try:
-            result = append_label_entry(
-                text=payload.text,
+            record = append_correction_entry(
+                prompt_id=payload.prompt_id,
+                prompt_text=payload.prompt_text,
+                tool=payload.tool,
                 parser_intent=payload.parser_intent,
                 reviewer_intent=payload.reviewer_intent,
-                reviewer_action=payload.action,
-                labeled_path=app.state.labeled_path,
+                reviewer_action=reviewer_action,
+                predicted_payload=predicted_payload,
+                corrected_payload=corrected_payload,
+                corrected_path=app.state.corrected_path,
+                updated_stores=updated_stores,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result
+        delete_pending_entry(app.state.pending_path, payload.prompt_id)
+
+        return {"record": record, "updated_stores": updated_stores, "latest_tool_result": tool_result}
+
+    @app.delete("/api/logs/pending/{prompt_id}")
+    def delete_pending(prompt_id: str) -> Dict[str, Any]:
+        if not prompt_id:
+            raise HTTPException(status_code=400, detail="prompt_id is required.")
+        removed = delete_pending_entry(app.state.pending_path, prompt_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Pending prompt not found.")
+        return {"deleted": True}
 
     @app.get("/api/intents")
     def list_intents() -> Dict[str, Any]:
@@ -266,11 +362,13 @@ def create_app(
     @app.get("/api/stats")
     def stats() -> Dict[str, Any]:
         pending_summary = summarize_pending_queue(app.state.pending_path)
-        labeled_count = count_jsonl_rows(app.state.labeled_path)
+        corrected_count = count_jsonl_rows(app.state.corrected_path)
         classifier_report = _read_json_if_exists(Path("reports/intent_classifier.json"))
         return {
             "pending": pending_summary,
-            "labeled_count": labeled_count,
+            "labeled_count": corrected_count,
+            "corrected_count": corrected_count,
+            "pending_sample": list_recent_pending(app.state.pending_path, limit=25),
             "classifier_report": classifier_report,
         }
 

@@ -16,7 +16,9 @@ from typing import Any, Dict, Optional
 from core.learning_logger import LearningLogger, ReviewItem, TurnRecord
 from core.llm_router import LLMRouter
 from core.nlu_service import NLUResult, NLUService
+from core.parser_payloads import normalize_parser_payload
 from core.tool_registry import ToolRegistry
+from core.text_utils import hash_text
 from tools.calendar_edit_tool import format_calendar_response
 from tools.kitchen_tips_tool import format_kitchen_tips_response
 from tools.news_tool import format_news_list
@@ -129,6 +131,11 @@ class Orchestrator:
         raw_message = message or ""
         nlu_result = self._nlu.parse(raw_message)
         is_confident = self._nlu.is_confident(nlu_result)
+        entities_snapshot = dict(nlu_result.entities or {})
+        parser_payload = {"intent": nlu_result.intent}
+        normalized_entities = normalize_parser_payload(entities_snapshot)
+        if normalized_entities:
+            parser_payload.update(normalized_entities)
 
         response_text = ""
         response_summary: Optional[str] = None
@@ -236,6 +243,7 @@ class Orchestrator:
             metadata,
             extras or {},
             review_reason,
+            parser_payload,
         )
 
         return OrchestratorResponse(
@@ -284,6 +292,7 @@ class Orchestrator:
         metadata: Optional[Dict[str, Any]],
         extras: Optional[Dict[str, Any]],
         review_reason: Optional[str],
+        parser_payload: Optional[Dict[str, Any]],
     ) -> None:
         if not self._logger or not self._logger.enabled:
             return
@@ -307,6 +316,7 @@ class Orchestrator:
         self._logger.log_turn(turn_record)
 
         if review_reason:
+            prompt_id = hash_text(message or "") or None
             review = ReviewItem.new(
                 user_text=message,
                 intent=nlu_result.intent,
@@ -315,5 +325,7 @@ class Orchestrator:
                 tool_name=tool_name,
                 metadata=metadata,
                 extras=extras,
+                prompt_id=prompt_id,
+                parser_payload=parser_payload,
             )
             self._logger.log_review_item(review)

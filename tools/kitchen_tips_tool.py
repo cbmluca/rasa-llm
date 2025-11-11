@@ -210,7 +210,7 @@ def _error_response(action: str, code: str, message: str) -> Dict[str, Any]:
     return {"type": "kitchen_tips", "domain": "kitchen", "action": action, "error": code, "message": message}
 
 
-def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = True) -> str:
+def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = False) -> str:
     if not include_raw:
         return message
     return f"{message}\nRaw:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"

@@ -26,6 +26,7 @@ _DEFAULT_REVIEW_QUEUE_DIR = "data_pipeline/nlu_training_bucket"
 _TURN_LOG_FILENAME = "turns.jsonl"
 _REVIEW_QUEUE_FILENAME = "pending.jsonl"
 _LABELED_QUEUE_FILENAME = "labeled_prompts.jsonl"
+_CORRECTED_QUEUE_FILENAME = "corrected_prompts.jsonl"
 _DEFAULT_LOG_REDACTION_PATTERNS = "email,phone,credit_card,gov_id,url"
 _DEFAULT_LOG_MAX_BYTES = 1_000_000
 _DEFAULT_LOG_BACKUP_COUNT = 5
@@ -118,6 +119,12 @@ def get_labeled_queue_path(env: Dict[str, str] | None = None) -> Path:
     """Return the path where reviewer-labeled prompts are stored."""
 
     return get_review_queue_dir(env) / _LABELED_QUEUE_FILENAME
+
+
+def get_corrected_prompts_path(env: Dict[str, str] | None = None) -> Path:
+    """Return the path that stores parser-vs-corrected prompt pairs."""
+
+    return get_review_queue_dir(env) / _CORRECTED_QUEUE_FILENAME
 
 
 def is_log_redaction_enabled(env: Dict[str, str] | None = None) -> bool:

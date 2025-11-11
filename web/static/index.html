@@ -3,18 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tier-5 Web UI</title>
+    <title>Taskmaster</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="page">
       <header class="page-header">
         <div>
-          <p class="eyebrow">Tier 5</p>
-          <h1>Web UI &amp; Admin Panel</h1>
-          <p class="subtitle">
-            Mirror the CLI chat flow, label prompts inline, and edit JSON-backed data stores without leaving your browser.
-          </p>
+          <h1>Taskmaster</h1>
         </div>
         <div class="header-actions">
           <button id="refresh-button" class="button secondary">Refresh Data</button>
@@ -23,7 +19,7 @@
       </header>
       <nav class="top-nav">
         <button class="nav-link active" data-target="front-page">Chat &amp; Data</button>
-        <button class="nav-link" data-target="training-page">Training</button>
+        <button class="nav-link" data-target="training-page">Training Logs</button>
       </nav>
 
       <div class="page-view active" id="front-page">
@@ -31,7 +27,6 @@
           <div class="panel-header">
             <div>
               <h2>Chat Console</h2>
-              <p>Every turn runs through the Tier-1 orchestrator.</p>
             </div>
             <span class="badge" id="chat-status">Idle</span>
           </div>
@@ -42,80 +37,121 @@
           </form>
         </section>
 
+        <section class="panel" id="self-learning-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Self-Learning Dashboard</h2>
+            </div>
+            <div class="subpanel-actions">
+              <button id="pending-refresh" class="button ghost">Refresh</button>
+            </div>
+          </div>
+          <div class="self-learning-grid">
+            <div class="pending-column">
+              <div class="pending-toolbar">
+                <div>
+                  <p class="hint">Pending prompts</p>
+                  <h3 id="pending-count-inline">0</h3>
+                </div>
+                <div class="pending-controls">
+                  <span class="page-indicator">Page <span id="pending-page">1</span></span>
+                  <div class="pending-nav">
+                    <button id="pending-prev" class="button ghost" type="button">Prev</button>
+                    <button id="pending-next" class="button ghost" type="button">Next</button>
+                  </div>
+                </div>
+              </div>
+              <ul id="pending-list" class="pending-list"></ul>
+            </div>
+          </div>
+          <div id="editor-panel" class="correction-column hidden">
+            <div class="form-grid">
+              <label>
+                Intent
+                <select id="intent-select"></select>
+              </label>
+              <label>
+                Action
+                <select id="action-select"></select>
+              </label>
+            </div>
+            <div class="field-grid" id="dynamic-field-grid"></div>
+            <div class="version-history" id="version-history"></div>
+            <div class="form-actions">
+              <button id="correct-button" class="button primary" type="button" disabled>Correct</button>
+            </div>
+          </div>
+          <div class="latest-confirmed" id="latest-confirmed-card">
+            <div>
+              <p class="hint">Latest Confirmed</p>
+              <h3 id="latest-confirmed-title">No corrections yet.</h3>
+              <p class="hint" id="latest-confirmed-meta">Corrected payloads appear here after you save.</p>
+            </div>
+            <div id="latest-confirmed-payload"></div>
+          </div>
+        </section>
+
         <section class="panel" id="data-panel">
           <div class="panel-header">
             <div>
               <h2>Data Stores</h2>
-              <p>Todos, kitchen tips, calendar events, and App Guide entries share the same tool-backed persistence.</p>
             </div>
             <button id="data-refresh" class="button ghost">Refresh Stores</button>
           </div>
-
-          <div class="data-stack">
-            <div class="data-card" id="todos-panel">
-              <div class="data-card-header">
-                <h3>Todos</h3>
-              </div>
+          <div class="data-tabs" id="data-tabs">
+            <button class="data-tab active" data-store="todos">Todos</button>
+            <button class="data-tab" data-store="calendar">Calendar</button>
+            <button class="data-tab" data-store="kitchen_tips">Kitchen Tips</button>
+            <button class="data-tab" data-store="app_guide">App Guide</button>
+          </div>
+          <div class="data-panels">
+            <div class="data-panel-view active" data-store="todos">
               <table class="data-table tight">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Status</th>
-                  <th>Deadline</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-            <form id="todo-form" class="inline-form">
-              <input name="title" placeholder="New todo" required />
-              <input name="deadline" placeholder="Deadline (YYYY-MM-DD)" />
-              <button class="button primary" type="submit">Add Todo</button>
-            </form>
-          </div>
-
-          <div class="data-card" id="kitchen-panel">
-            <div class="data-card-header">
-              <h3>Kitchen Tips</h3>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Deadline</th>
+                  </tr>
+                </thead>
+                <tbody id="todos-panel"></tbody>
+              </table>
+              <form id="todo-form" class="inline-form">
+                <input name="title" placeholder="New todo" required />
+                <input name="deadline" placeholder="Deadline (YYYY-MM-DD)" />
+                <button class="button primary" type="submit">Add Todo</button>
+              </form>
             </div>
-            <ul class="list" id="kitchen-list"></ul>
-            <form id="kitchen-form" class="inline-form">
-              <input name="title" placeholder="Tip title" required />
-              <input name="tags" placeholder="Tags (comma separated)" />
-              <input name="link" placeholder="Link" />
-              <textarea name="body" placeholder="Tip details"></textarea>
-              <button class="button primary" type="submit">Add Tip</button>
-            </form>
-          </div>
-
-          <div class="data-card" id="calendar-panel">
-            <div class="data-card-header">
-              <h3>Calendar</h3>
+            <div class="data-panel-view" data-store="calendar">
+              <table class="data-table tight">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Start</th>
+                    <th>End</th>
+                  </tr>
+                </thead>
+                <tbody id="calendar-panel"></tbody>
+              </table>
+              <form id="calendar-form" class="inline-form">
+                <input name="title" placeholder="Event title" required />
+                <input name="start" placeholder="Start (ISO)" required />
+                <input name="end" placeholder="End (ISO)" />
+                <input name="location" placeholder="Location" />
+                <button class="button primary" type="submit">Add Event</button>
+              </form>
             </div>
-            <table class="data-table tight">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Start</th>
-                  <th>End</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-            <form id="calendar-form" class="inline-form">
-              <input name="title" placeholder="Event title" required />
-              <input name="start" placeholder="Start (ISO)" required />
-              <input name="end" placeholder="End (ISO)" />
-              <input name="location" placeholder="Location" />
-              <button class="button primary" type="submit">Add Event</button>
-            </form>
-          </div>
-
-            <div class="data-card" id="guide-panel">
-              <div class="data-card-header">
-                <h3>App Guide</h3>
-              </div>
+            <div class="data-panel-view" data-store="kitchen_tips">
+              <ul class="list" id="kitchen-list"></ul>
+              <form id="kitchen-form" class="inline-form">
+                <input name="title" placeholder="Tip title" required />
+                <input name="tags" placeholder="Tags (comma separated)" />
+                <input name="link" placeholder="Link" />
+                <textarea name="body" placeholder="Tip details"></textarea>
+                <button class="button primary" type="submit">Add Tip</button>
+              </form>
+            </div>
+            <div class="data-panel-view" data-store="app_guide">
               <ul class="list" id="guide-list"></ul>
               <form id="guide-form" class="inline-form">
                 <input name="section_id" placeholder="Section ID" required />
@@ -147,51 +183,10 @@
           </div>
         </section>
 
-        <section class="panel training-panel" id="pending-panel">
-          <div class="panel-header">
-            <div>
-              <h2>Self-Learning Dashboard</h2>
-              <p>Pending prompts ready for reviewer labeling.</p>
-            </div>
-            <div class="subpanel-actions">
-              <button id="pending-refresh" class="button ghost">Refresh</button>
-            </div>
-          </div>
-          <div class="pagination-controls">
-            <button id="pending-prev" class="button ghost">Previous</button>
-            <span class="page-indicator">Page <span id="pending-page">1</span></span>
-            <button id="pending-next" class="button ghost">Next</button>
-            <label class="limit-picker">
-              Rows
-              <select id="pending-limit">
-                <option value="10">10</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-            </label>
-          </div>
-          <table class="data-table" id="pending-table">
-            <thead>
-              <tr>
-                <th>Prompt</th>
-                <th>Parser Intent</th>
-                <th>Reason</th>
-                <th>Assign</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-          <div class="export-row">
-            <button id="export-prompts" class="button secondary">Export latest prompts</button>
-            <div class="export-links" id="export-links"></div>
-          </div>
-        </section>
-
         <section class="panel training-panel" id="classifier-panel">
           <div class="panel-header">
             <div>
               <h2>Classifier Log</h2>
-              <p>Recent classifier-sourced turns with drift signals.</p>
             </div>
             <div class="subpanel-actions">
               <button id="classifier-refresh" class="button ghost">Refresh</button>
@@ -210,23 +205,21 @@
           </table>
         </section>
 
-        <section class="panel training-panel" id="labeled-panel">
+        <section class="panel training-panel" id="corrected-panel">
           <div class="panel-header">
             <div>
-              <h2>Labeled Prompts</h2>
-              <p>Ground-truth queue powering the classifier retraining job.</p>
+              <h2>Labeled Prompt Pairs</h2>
             </div>
             <div class="subpanel-actions">
-              <button id="labeled-refresh" class="button ghost">Refresh</button>
+              <button id="corrected-refresh" class="button ghost">Refresh</button>
             </div>
           </div>
-          <table class="data-table" id="labeled-table">
+          <table class="data-table" id="corrected-table">
             <thead>
               <tr>
-                <th>Text</th>
-                <th>Parser</th>
-                <th>Reviewer</th>
-                <th>Action</th>
+                <th>Prompt</th>
+                <th>Predicted</th>
+                <th>Corrected</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -237,7 +230,6 @@
           <div class="panel-header">
             <div>
               <h2>Upload labeled CSV/JSON</h2>
-              <p>Append reviewer annotations directly to labeled_prompts.jsonl.</p>
             </div>
           </div>
           <form id="import-form" class="import-form">
@@ -250,6 +242,17 @@
               <button type="submit" class="button primary">Import Labels</button>
             </div>
           </form>
+        </section>
+        <section class="panel training-panel" id="export-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Export latest prompts</h2>
+            </div>
+          </div>
+          <div class="export-row">
+            <button id="export-prompts" class="button secondary">Export pending</button>
+            <div class="export-links" id="export-links"></div>
+          </div>
         </section>
       </div>
     </div>

@@ -37,6 +37,7 @@ _REDACT_FIELDS = {
     "response_text",
     "response_summary",
     "entities",
+    "parser_payload",
     "tool_payload",
     "metadata",
     "extras",
@@ -122,6 +123,8 @@ class ReviewItem:
     tool_name: str | None = None
     metadata: Dict[str, Any] | None = None
     extras: Dict[str, Any] | None = None
+    prompt_id: Optional[str] = None
+    parser_payload: Dict[str, Any] | None = None
 
     @classmethod
     def new(
@@ -134,6 +137,8 @@ class ReviewItem:
         tool_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
         extras: Dict[str, Any] | None = None,
+        prompt_id: Optional[str] = None,
+        parser_payload: Dict[str, Any] | None = None,
     ) -> "ReviewItem":
         """Factory helper that auto-populates the timestamp."""
 
@@ -146,6 +151,8 @@ class ReviewItem:
             tool_name=tool_name,
             metadata=metadata,
             extras=extras,
+            prompt_id=prompt_id,
+            parser_payload=parser_payload,
         )
 
 

@@ -105,7 +105,7 @@ def test_calendar_formatter_includes_raw(tmp_path: Path, monkeypatch: pytest.Mon
 
     result = calendar_edit.run({"action": "list"})
     formatted = calendar_edit.format_calendar_response(result)
-    assert "Raw:" in formatted
+    assert "Raw:" not in formatted
 
 
 def test_calendar_accepts_danish_datetime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
