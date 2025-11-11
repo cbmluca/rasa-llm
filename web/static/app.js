@@ -1,6 +1,6 @@
 const POLL_INTERVAL_MS = 15000;
 const DEFAULT_INTENT_ACTIONS = {
-  todo_list: ['list', 'create', 'update', 'delete'],
+  todo_list: ['list', 'find', 'create', 'update', 'delete'],
   kitchen_tips: ['list', 'search', 'get', 'create'],
   calendar_edit: ['list', 'create', 'update', 'delete'],
   app_guide: ['list', 'get', 'upsert', 'delete'],
@@ -8,8 +8,10 @@ const DEFAULT_INTENT_ACTIONS = {
 
 const FIELD_ORDER = [
   'title',
+  'id',
   'section_id',
   'content',
+  'body',
   'notes',
   'status',
   'priority',
@@ -18,16 +20,23 @@ const FIELD_ORDER = [
   'end',
   'location',
   'notes_append',
+  'keywords',
+  'query',
   'link',
   'tags',
   'target_title',
   'new_title',
+  'city',
+  'time',
+  'topic',
+  'language',
 ];
 
 const FIELD_LIBRARY = {
   title: { label: 'Title' },
   section_id: { label: 'Section ID' },
   content: { label: 'Content', type: 'textarea', placeholder: 'Details or body text' },
+  body: { label: 'Body', type: 'textarea', placeholder: 'Details or body text' },
   notes: { label: 'Notes', type: 'textarea' },
   notes_append: { label: 'Append Notes', type: 'textarea' },
   status: { label: 'Status', placeholder: 'pending / completed' },
@@ -36,10 +45,17 @@ const FIELD_LIBRARY = {
   start: { label: 'Start', placeholder: 'ISO datetime' },
   end: { label: 'End', placeholder: 'ISO datetime' },
   location: { label: 'Location' },
+  keywords: { label: 'Keywords', placeholder: 'Search terms' },
+  query: { label: 'Query' },
   link: { label: 'Link (URL)' },
   tags: { label: 'Tags', placeholder: 'comma separated' },
   target_title: { label: 'Target Title' },
   new_title: { label: 'New Title' },
+  city: { label: 'City' },
+  time: { label: 'Time hint' },
+  topic: { label: 'Topic' },
+  language: { label: 'Language (e.g., en)' },
+  id: { label: 'ID' },
 };
 
 const TOOL_REQUIRED_FIELDS = {
@@ -52,24 +68,90 @@ const TOOL_REQUIRED_FIELDS = {
 const TOOL_EXTRA_FIELDS = {
   calendar_edit: ['location', 'notes'],
   todo_list: ['notes', 'deadline', 'priority'],
-  kitchen_tips: ['link', 'tags', 'content'],
+  kitchen_tips: ['body', 'link', 'tags'],
   app_guide: ['content'],
 };
 
 const TOOL_ACTION_FIELD_CONFIG = {
   kitchen_tips: {
+    create: { fields: ['title', 'body', 'tags', 'link'], required: ['title', 'body'] },
+    update: { fields: ['id', 'title', 'body', 'tags', 'link'], required: ['id'] },
+    delete: { fields: ['id', 'title'], required: ['id'] },
     search: { fields: ['query'], required: ['query'] },
     get: { fields: ['id', 'title'], required: ['id'] },
     list: { fields: [], required: [] },
   },
   todo_list: {
     list: { fields: [], required: [] },
+    find: { fields: ['keywords'], required: ['keywords'] },
+    create: { fields: ['title', 'deadline', 'priority', 'notes'], required: ['title'] },
     delete: { fields: ['id', 'target_title'], required: ['id'] },
-    update: { fields: ['id', 'target_title', 'status', 'deadline', 'priority', 'notes'], required: ['id'] },
+    update: { fields: ['id', 'target_title', 'new_title', 'status', 'deadline', 'priority', 'notes'], required: ['id'] },
   },
   calendar_edit: {
     list: { fields: [], required: [] },
+    create: { fields: ['title', 'start', 'end', 'location', 'notes', 'link'], required: ['title', 'start'] },
     delete: { fields: ['id', 'title'], required: ['id'] },
+    update: { fields: ['id', 'title', 'start', 'end', 'location', 'notes', 'link'], required: ['id'] },
+  },
+  app_guide: {
+    list: { fields: [], required: [] },
+    get: { fields: ['section_id', 'title'], required: ['section_id'] },
+    upsert: { fields: ['section_id', 'title', 'content'], required: ['section_id', 'title', 'content'] },
+    delete: { fields: ['section_id', 'title'], required: ['section_id'] },
+  },
+};
+
+const ENTITY_FIELD_CONFIG = {
+  todo_list: {
+    field: 'id',
+    store: 'todos',
+    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
+    hydrate: (entity) => ({
+      id: entity.id,
+      target_title: entity.title || '',
+      title: entity.title || '',
+      status: entity.status || 'pending',
+      deadline: entity.deadline || '',
+      priority: entity.priority || '',
+      notes: entity.notes || '',
+    }),
+  },
+  calendar_edit: {
+    field: 'id',
+    store: 'calendar',
+    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
+    hydrate: (entity) => ({
+      id: entity.id,
+      title: entity.title || '',
+      start: entity.start || '',
+      end: entity.end || '',
+      location: entity.location || '',
+      notes: entity.notes || '',
+      link: entity.link || '',
+    }),
+  },
+  kitchen_tips: {
+    field: 'id',
+    store: 'kitchen_tips',
+    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
+    hydrate: (entity) => ({
+      id: entity.id,
+      title: entity.title || '',
+      body: entity.body || '',
+      tags: Array.isArray(entity.tags) ? entity.tags.join(', ') : '',
+      link: entity.link || '',
+    }),
+  },
+  app_guide: {
+    field: 'section_id',
+    store: 'app_guide',
+    label: (entity) => `${entity.title || entity.section_id || 'Untitled'} (#${entity.section_id})`,
+    hydrate: (entity) => ({
+      section_id: entity.section_id || '',
+      title: entity.title || '',
+      content: entity.content || '',
+    }),
   },
 };
 
@@ -299,6 +381,60 @@ function formatPreviewValue(value) {
   return String(value ?? '');
 }
 
+function formatTimestamp(ts) {
+  if (!ts) return null;
+  const date = new Date(ts);
+  if (Number.isNaN(date.valueOf())) {
+    return null;
+  }
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function buildPendingMetadata(item) {
+  const parts = [];
+  const created = formatTimestamp(item.timestamp);
+  if (created) {
+    parts.push(`Created ${created}`);
+  }
+  if (typeof item.confidence === 'number') {
+    parts.push(`Confidence ${item.confidence.toFixed(2)}`);
+  }
+  const source = item.extras?.invocation_source || item.reason || item.tool_name;
+  if (source) {
+    parts.push(`Source ${source}`);
+  }
+  return parts.join(' • ');
+}
+
+function sortPendingByRecency(items) {
+  const sorted = (items || []).slice().sort((a, b) => {
+    const timeA = new Date(a?.timestamp || 0).getTime();
+    const timeB = new Date(b?.timestamp || 0).getTime();
+    if (!Number.isFinite(timeA) && !Number.isFinite(timeB)) return 0;
+    if (!Number.isFinite(timeA)) return 1;
+    if (!Number.isFinite(timeB)) return -1;
+    return timeB - timeA;
+  });
+  const seen = new Set();
+  return sorted.filter((item) => {
+    const key = item?.prompt_id || item?.text_hash || item?.user_text;
+    if (!key) {
+      return true;
+    }
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function getVersionCount(promptId) {
   if (!promptId) return 0;
   return state.corrected.filter((record) => record.id === promptId).length;
@@ -306,6 +442,48 @@ function getVersionCount(promptId) {
 
 function formatIntentLabel(intent) {
   return INTENT_LABELS[intent] || intent || 'nlu_fallback';
+}
+
+function getEntityOptions(tool) {
+  const config = ENTITY_FIELD_CONFIG[tool];
+  if (!config) return [];
+  const entities = state.dataStores[config.store] || [];
+  return entities
+    .filter((entity) => entity && (entity[config.field] || entity.id || entity.section_id))
+    .map((entity) => ({
+      value: String(entity[config.field] || entity.id || entity.section_id),
+      label: config.label(entity),
+      entity,
+    }));
+}
+
+function applyHydratedFields(fields) {
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+    if (value === null || value === '') {
+      delete state.correctionFields[key];
+    } else if (Array.isArray(value)) {
+      state.correctionFields[key] = value.map((item) => String(item)).join(', ');
+    } else {
+      state.correctionFields[key] = String(value);
+    }
+  });
+}
+
+function hydrateEntitySelection(tool, entityId) {
+  const config = ENTITY_FIELD_CONFIG[tool];
+  if (!config || !entityId) {
+    return;
+  }
+  const entities = state.dataStores[config.store] || [];
+  const target = entities.find((entity) => String(entity[config.field] || entity.id || entity.section_id) === entityId);
+  if (!target) {
+    return;
+  }
+  const hydrated = config.hydrate(target);
+  applyHydratedFields(hydrated);
 }
 
 function renderPendingMeta() {
@@ -328,12 +506,15 @@ function detachEditorPanel() {
   if (!el.editorPanel) {
     return;
   }
+  if (el.editorPanel.parentElement) {
+    el.editorPanel.parentElement.removeChild(el.editorPanel);
+  }
   el.editorPanel.classList.add('hidden');
 }
 
-function attachEditorPanel(container) {
-  if (!el.editorPanel || !container) return;
-  container.insertAdjacentElement('afterend', el.editorPanel);
+function attachEditorPanel(slot) {
+  if (!el.editorPanel || !slot) return;
+  slot.appendChild(el.editorPanel);
   el.editorPanel.classList.remove('hidden');
 }
 
@@ -344,11 +525,6 @@ function renderPendingList() {
   state.pending.forEach((item) => {
     const li = document.createElement('li');
     li.className = 'pending-item';
-    if (item.prompt_id === state.selectedPromptId) {
-      li.classList.add('editing');
-      attachEditorPanel(li);
-      renderCorrectionForm();
-    }
     const header = document.createElement('div');
     header.className = 'pending-item-header';
     const heading = document.createElement('h4');
@@ -387,8 +563,24 @@ function renderPendingList() {
       .map(([key, value]) => `${key}=${formatPreviewValue(value)}`)
       .join(', ');
     payload.textContent = preview || 'No parser payload';
+    const slot = document.createElement('div');
+    slot.className = 'pending-editor-slot';
+    slot.dataset.promptId = item.prompt_id;
     li.appendChild(header);
+    const metadataText = buildPendingMetadata(item);
+    if (metadataText) {
+      const metadata = document.createElement('p');
+      metadata.className = 'meta meta-secondary';
+      metadata.textContent = metadataText;
+      li.appendChild(metadata);
+    }
     li.appendChild(payload);
+    li.appendChild(slot);
+    if (item.prompt_id === state.selectedPromptId) {
+      li.classList.add('editing');
+      attachEditorPanel(slot);
+      renderCorrectionForm();
+    }
     li.addEventListener('click', (event) => {
       if (el.editorPanel && el.editorPanel.contains(event.target)) {
         return;
@@ -417,18 +609,85 @@ function normalizeFormFields(payload) {
   return normalized;
 }
 
-function computeFieldList(tool, action, payload) {
-  const override = TOOL_ACTION_FIELD_CONFIG[tool]?.[action];
-  if (override) {
-    return override.fields || [];
+function normalizeParserFieldsWithWhitelist(tool, payload) {
+  const whitelist = TOOL_FIELD_WHITELIST[tool];
+  if (!whitelist) {
+    return normalizeFormFields(payload);
   }
-  const keys = new Set();
-  Object.keys(payload || {}).forEach((key) => keys.add(key));
-  (TOOL_EXTRA_FIELDS[tool] || []).forEach((key) => keys.add(key));
-  (TOOL_REQUIRED_FIELDS[tool] || []).forEach((key) => keys.add(key));
-  const ordered = FIELD_ORDER.filter((field) => keys.has(field));
-  const extras = [...keys].filter((field) => !FIELD_ORDER.includes(field));
-  return [...ordered, ...extras];
+  const normalized = {};
+  whitelist.forEach((path) => {
+    let value = payload[path];
+    if (value === undefined) {
+      const segments = path.split('.');
+      if (segments.length > 1) {
+        value = payload;
+        for (const segment of segments) {
+          if (value && typeof value === 'object' && segment in value) {
+            value = value[segment];
+          } else {
+            value = undefined;
+            break;
+          }
+        }
+      }
+    }
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+    let formatted = '';
+    if (tool === 'weather' && path === 'time' && typeof value === 'object') {
+      const parts = [];
+      if (value.day) parts.push(String(value.day));
+      if (value.hour !== undefined) parts.push(`hour ${value.hour}`);
+      if (value.minute !== undefined) parts.push(`minute ${value.minute}`);
+      if (value.raw) parts.push(String(value.raw));
+      formatted = parts.join(' ').trim() || JSON.stringify(value);
+    } else {
+      formatted = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    }
+    normalized[path.replace(/\./g, '_')] = formatted;
+  });
+  return normalized;
+}
+
+function computeFieldList(tool, action, payload) {
+  const entityField = ENTITY_FIELD_CONFIG[tool]?.field;
+  const override = TOOL_ACTION_FIELD_CONFIG[tool]?.[action];
+  const overrideFields = override?.fields || [];
+  let fields;
+  if (override) {
+    fields = [...overrideFields];
+  } else {
+    const keys = new Set();
+    Object.keys(payload || {}).forEach((key) => keys.add(key));
+    (TOOL_EXTRA_FIELDS[tool] || []).forEach((key) => keys.add(key));
+    (TOOL_REQUIRED_FIELDS[tool] || []).forEach((key) => keys.add(key));
+    (TOOL_FIELD_WHITELIST[tool] || []).forEach((path) => keys.add(path.replace(/\./g, '_')));
+    if (entityField) {
+      keys.add(entityField);
+    }
+    const ordered = FIELD_ORDER.filter((field) => keys.has(field));
+    const extras = [...keys].filter((field) => !FIELD_ORDER.includes(field));
+    fields = [...ordered, ...extras];
+  }
+  const shouldIncludeEntityField = Boolean(
+    entityField && (!override || overrideFields.includes(entityField)),
+  );
+  if (entityField) {
+    if (shouldIncludeEntityField && !fields.includes(entityField)) {
+      fields = [entityField, ...fields];
+    } else if (!shouldIncludeEntityField) {
+      fields = fields.filter((field) => field !== entityField);
+    }
+  }
+  const seen = new Set();
+  return fields.filter((field) => {
+    if (seen.has(field)) {
+      return false;
+    }
+    seen.add(field);
+    return true;
+  });
 }
 
 function isFieldRequired(tool, action, field) {
@@ -461,25 +720,13 @@ function renderDynamicFields(tool, action) {
   el.dynamicFieldGrid.innerHTML = '';
   const requiresActionFirst = !!TOOL_ACTION_FIELD_CONFIG[tool];
   if (!tool || !state.selectedPrompt) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'hint';
-    placeholder.textContent = 'Select a pending prompt to edit tool fields.';
-    el.dynamicFieldGrid.appendChild(placeholder);
     return;
   }
   if (requiresActionFirst && !action) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'hint';
-    placeholder.textContent = 'Choose an action to edit its fields.';
-    el.dynamicFieldGrid.appendChild(placeholder);
     return;
   }
   const fields = computeFieldList(tool, action, state.correctionFields);
   if (!fields.length) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'hint';
-    placeholder.textContent = 'No tool-specific fields for this intent.';
-    el.dynamicFieldGrid.appendChild(placeholder);
     return;
   }
   fields.forEach((field) => {
@@ -492,6 +739,50 @@ function renderDynamicFields(tool, action) {
     if (required && !(state.correctionFields[field]?.trim())) {
       wrapper.classList.add('field-required');
     }
+    const entityConfig = ENTITY_FIELD_CONFIG[tool];
+    const isEntityField = entityConfig && entityConfig.field === field;
+    if (isEntityField) {
+      const select = document.createElement('select');
+      const placeholderOption = document.createElement('option');
+      placeholderOption.value = '';
+      placeholderOption.textContent = 'Choose entry';
+      select.appendChild(placeholderOption);
+      const options = getEntityOptions(tool);
+      const currentValue = state.correctionFields[field] || '';
+      let hasCurrent = false;
+      options.forEach(({ value, label: optionLabel }) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = optionLabel;
+        if (value === currentValue) {
+          option.selected = true;
+          hasCurrent = true;
+        }
+        select.appendChild(option);
+      });
+      if (currentValue && !hasCurrent) {
+        const option = document.createElement('option');
+        option.value = currentValue;
+        option.textContent = currentValue;
+        option.selected = true;
+        select.appendChild(option);
+      }
+      select.addEventListener('change', (event) => {
+        const value = event.target.value;
+        if (value) {
+          state.correctionFields[field] = value;
+          hydrateEntitySelection(tool, value);
+          renderDynamicFields(tool, action);
+        } else {
+          delete state.correctionFields[field];
+        }
+        updateCorrectButtonState();
+      });
+      wrapper.appendChild(select);
+      el.dynamicFieldGrid.appendChild(wrapper);
+      return;
+    }
+
     const control =
       config.type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
     control.value = state.correctionFields[field] ?? '';
@@ -528,10 +819,6 @@ function renderVersionHistory() {
     .filter((record) => record.id === state.selectedPrompt.prompt_id)
     .sort((a, b) => (a.version || 0) - (b.version || 0));
   if (!history.length) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'hint';
-    placeholder.textContent = 'No saved corrections yet.';
-    el.versionHistory.appendChild(placeholder);
     return;
   }
   const list = document.createElement('ul');
@@ -597,23 +884,29 @@ function renderCorrectionForm() {
     el.intentSelect.value = '';
     el.intentSelect.disabled = true;
     el.actionSelect.disabled = true;
-    el.selectedPromptText.textContent = '';
-    el.selectedReason.textContent = '';
-    el.promptSummary?.classList.add('hidden');
-    el.dynamicFieldGrid.innerHTML = '<p class="hint">Parser payload fields will appear here.</p>';
+    if (el.selectedPromptText) {
+      el.selectedPromptText.textContent = '';
+    }
+    if (el.selectedReason) {
+      el.selectedReason.textContent = '';
+    }
+    el.dynamicFieldGrid.innerHTML = '<p class="hint">Select a pending prompt to edit tool fields.</p>';
     el.versionHistory.innerHTML = '<p class="hint">Version history is empty.</p>';
     updateCorrectButtonState();
     return;
   }
-  el.promptSummary?.classList.remove('hidden');
   el.intentSelect.disabled = false;
   el.actionSelect.disabled = false;
   const titleText =
     state.selectedPrompt.user_text && state.selectedPrompt.user_text.trim()
       ? state.selectedPrompt.user_text
       : '—';
-  el.selectedPromptText.textContent = titleText;
-  el.selectedReason.textContent = `Reason: ${state.selectedPrompt.reason || 'review'}`;
+  if (el.selectedPromptText) {
+    el.selectedPromptText.textContent = titleText;
+  }
+  if (el.selectedReason) {
+    el.selectedReason.textContent = `Reason: ${state.selectedPrompt.reason || 'review'}`;
+  }
   const reviewerIntent = state.selectedPrompt.intent || '';
   el.intentSelect.value = reviewerIntent;
   const predicted = state.selectedPrompt.predicted_payload_raw || {};
@@ -630,7 +923,7 @@ function selectPendingPrompt(item) {
     ...item,
     predicted_payload_raw: predicted,
   };
-  state.correctionFields = normalizeFormFields(predicted);
+  state.correctionFields = normalizeParserFieldsWithWhitelist(item.intent, predicted);
   renderPendingList();
   renderCorrectionForm();
 }
@@ -693,6 +986,7 @@ function addPendingRecord(record) {
   } else {
     state.pending.unshift(record);
   }
+  state.pending = sortPendingByRecency(state.pending);
   renderPendingList();
 }
 
@@ -950,7 +1244,7 @@ async function loadPending(preserveSelection = false) {
   const previousId = preserveSelection ? state.selectedPromptId : null;
   const params = new URLSearchParams({ limit: state.pendingLimit, page: state.pendingPage });
   const data = await fetchJSON(`/api/logs/pending?${params.toString()}`);
-  state.pending = data.items || [];
+  state.pending = sortPendingByRecency(data.items || []);
   state.stats.pending = data.summary;
   state.pendingHasMore = Boolean(data.has_more);
   if (typeof data.page === 'number') {
@@ -1011,7 +1305,7 @@ async function loadStats() {
   state.stats = data || {};
   renderStats();
   if ((!state.pending || state.pending.length === 0) && Array.isArray(data.pending_sample) && data.pending_sample.length) {
-    state.pending = data.pending_sample;
+    state.pending = sortPendingByRecency(data.pending_sample);
     renderPendingList();
   }
 }
@@ -1252,4 +1546,9 @@ const INTENT_LABELS = {
   calendar_edit: 'Calendar tool',
   app_guide: 'App guide tool',
   nlu_fallback: 'Fallback',
+};
+
+const TOOL_FIELD_WHITELIST = {
+  weather: ['city', 'time'],
+  news: ['topic', 'language'],
 };

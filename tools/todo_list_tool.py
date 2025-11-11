@@ -34,6 +34,9 @@ _ACTION_ALIASES = {
     "list": "list",
     "show": "list",
     "display": "list",
+    "find": "find",
+    "search": "find",
+    "lookup": "find",
     "create": "create",
     "add": "create",
     "new": "create",
@@ -132,6 +135,24 @@ class TodoStore:
             _augment_deadline_metadata(todo_dict)
             todos.append(todo_dict)
         return todos
+
+    def find_todos(self, keywords: str) -> List[Dict[str, Any]]:
+        tokens = _tokenize_keywords(keywords)
+        if not tokens:
+            return []
+        entries = self._load_items()
+        matches: List[Dict[str, Any]] = []
+        for entry in entries:
+            haystack_parts = [entry.title, entry.status, entry.priority or "", entry.id]
+            if entry.notes:
+                haystack_parts.extend(entry.notes)
+            haystack = " ".join(part.lower() for part in haystack_parts if isinstance(part, str))
+            if all(token in haystack for token in tokens):
+                todo_dict = entry.to_dict()
+                _augment_deadline_metadata(todo_dict)
+                matches.append(todo_dict)
+        matches.sort(key=_sort_key_for_entry_dict)
+        return matches
 
     def create_todo(
         self,
@@ -275,6 +296,19 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "todos": todos,
             "count": len(todos),
         }
+    if action == "find":
+        keywords = _extract_search_keywords(payload)
+        if not keywords:
+            return _error_response("find", "missing_keywords", "Please include at least one keyword in your search.")
+        matches = store.find_todos(keywords)
+        return {
+            "type": "todo_list",
+            "domain": "todo",
+            "action": "find",
+            "query": keywords,
+            "todos": matches,
+            "count": len(matches),
+        }
 
     if action == "create":
         title = _extract_title(payload)
@@ -402,23 +436,24 @@ def format_todo_response(result: Dict[str, Any]) -> str:
         todos = result.get("todos") or []
         if not todos:
             return "Your todo list is empty."
-        lines: List[str] = []
-        for item in todos:
-            status_box = "x" if item.get("status") == "completed" else " "
-            priority_label = _format_priority_label(item.get("priority"))
-            line = f"- [{status_box}]"
-            if priority_label:
-                line += f" [{priority_label}]"
-            line += f" {item.get('title', 'Untitled')} (#{item.get('id')})"
-            if item.get("deadline"):
-                days = item.get("deadline_days_until")
-                if days is not None:
-                    countdown = f"{days} days" if days != 1 else "1 day"
-                    line += f" due {item['deadline']} ({countdown})"
-                else:
-                    line += f" due {item['deadline']}"
-            lines.append(line)
+        lines = [_format_todo_line(item) for item in todos]
         return "Todos:\n" + "\n".join(lines)
+    if action == "find":
+        todos = result.get("todos") or []
+        query = result.get("query")
+        if not todos:
+            return f"No todos matched '{query}'." if query else "No todos matched those keywords."
+        tokens = _tokenize_keywords(query)
+        if tokens:
+            todos = sorted(
+                todos,
+                key=lambda item: (-_score_todo_match(item, tokens), _sort_key_for_entry_dict(item)),
+            )
+        lines = [_format_todo_line(item, include_done_tag=True) for item in todos]
+        prefix = f"Found {len(todos)} todo(s)"
+        if query:
+            prefix += f" for '{query}'"
+        return prefix + ":\n" + "\n".join(lines)
 
     if action == "create":
         todo = result.get("todo") or {}
@@ -563,6 +598,19 @@ def _extract_notes_from_message(payload: Dict[str, Any]) -> Optional[List[str]]:
         return None
     notes = extract_notes_from_text(message)
     return notes or None
+
+
+def _extract_search_keywords(payload: Dict[str, Any]) -> str:
+    if "keywords" in payload:
+        value = payload.get("keywords")
+        return str(value).strip() if value is not None else ""
+    if "query" in payload:
+        value = payload.get("query")
+        return str(value).strip() if value is not None else ""
+    message = payload.get("message")
+    if isinstance(message, str):
+        return message.strip()
+    return ""
 
 
 def _extract_title_from_message(message: str) -> Optional[str]:
@@ -755,8 +803,51 @@ def _sort_key_for_entry(entry: TodoItem) -> Tuple[int, date, str]:
     return (has_deadline, deadline_date, entry.title.lower())
 
 
+def _sort_key_for_entry_dict(entry: Dict[str, Any]) -> Tuple[int, date, str]:
+    deadline_value = entry.get("deadline")
+    deadline_date = _deadline_to_date(deadline_value) or date.max
+    has_deadline = 0 if deadline_value else 1
+    title = str(entry.get("title") or "").lower()
+    return (has_deadline, deadline_date, title or entry.get("id", ""))
+
+
+def _tokenize_keywords(text: str) -> List[str]:
+    tokens = [token.strip().lower() for token in re.split(r"[\\s,]+", text or "") if token.strip()]
+    return tokens
+
+
 def _normalize_deadline_text(text: str) -> str:
     return str(text or "").strip().strip(".,;")
+
+
+def _format_todo_line(todo: Dict[str, Any], *, include_done_tag: bool = False) -> str:
+    status_box = "x" if todo.get("status") == "completed" else " "
+    priority_label = _format_priority_label(todo.get("priority"))
+    line = f"- [{status_box}] {todo.get('title', 'Untitled')}"
+    if priority_label:
+        line += f" [{priority_label}]"
+    if include_done_tag and todo.get("status") == "completed":
+        line += " [done]"
+    deadline = todo.get("deadline")
+    if deadline:
+        days = todo.get("deadline_days_until")
+        if days is not None:
+            countdown = f"{days} days" if days != 1 else "1 day"
+            line += f" — due {deadline} ({countdown})"
+        else:
+            line += f" — due {deadline}"
+    return line
+
+
+def _score_todo_match(todo: Dict[str, Any], tokens: List[str]) -> int:
+    if not tokens:
+        return 0
+    haystack_parts = [todo.get("title", ""), todo.get("status", ""), todo.get("priority", "")]
+    notes = todo.get("notes")
+    if isinstance(notes, list):
+        haystack_parts.extend(notes)
+    haystack = " ".join(str(part).lower() for part in haystack_parts if part)
+    return sum(1 for token in tokens if token in haystack)
 
 
 __all__ = ["run", "format_todo_response", "TodoStore", "TodoItem"]

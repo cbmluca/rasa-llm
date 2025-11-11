@@ -27,7 +27,25 @@ def test_run_defaults_to_copenhagen_when_city_missing(monkeypatch):
     result = weather.run({"intent": "weather", "message": "Need the weather please"})
 
     assert captured["calls"][0] == "Copenhagen"
-    assert "defaulting to Copenhagen" in (result.get("note") or "")
+    assert not (result.get("note") or "").strip()
+
+
+def test_run_preserves_time_label_for_relative_requests(monkeypatch):
+    def fake_geocode(city: str):
+        return _fake_loc(city)
+
+    monkeypatch.setattr(weather, "geocode_city", fake_geocode)
+    monkeypatch.setattr(weather, "get_current_weather", _stub_current)
+    monkeypatch.setattr(weather, "get_hourly_forecast", _stub_hourly)
+
+    payload = {
+        "intent": "weather",
+        "message": "weather tomorrow",
+        "time": {"day": "tomorrow", "raw": "tomorrow"},
+    }
+    result = weather.run(payload)
+
+    assert result.get("time_label") == "tomorrow"
 
 
 def test_city_tokens_are_sanitized(monkeypatch):
@@ -65,3 +83,16 @@ def test_city_can_be_inferred_from_message(monkeypatch):
     assert captured["calls"][0] == "Berlin"
     assert result["city"] == "Berlin"
     assert (result.get("note") or "").strip() == ""
+
+
+def test_format_response_includes_time_label():
+    summary = weather.format_weather_response(
+        {
+            "type": "weather",
+            "city": "Copenhagen",
+            "temperature": 12,
+            "mode": "current",
+            "time_label": "tomorrow",
+        }
+    )
+    assert "tomorrow" in summary.lower()

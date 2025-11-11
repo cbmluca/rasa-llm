@@ -13,6 +13,7 @@ from core.parsers.types import CommandResult
 _TODO_DIRECTIVE_TOKENS = ("notes", "note", "deadline", "due", "reminder")
 _LIST_TODOS_PATTERN = re.compile(r"\b(list|show|display|see)\b[^\n]*\b(todos?|tasks?)\b", re.IGNORECASE)
 _SIMPLE_LIST_PATTERN = re.compile(r"^\s*(?:todos?|todo list|my todos|list todos?)\b", re.IGNORECASE)
+_FIND_TODOS_PATTERN = re.compile(r"\b(find|search|look\s*up|locate)\b[^\n]*\b(todos?|tasks?)?", re.IGNORECASE)
 _COMPLETE_TODO_PATTERN = re.compile(r"\b(complete|finish)\b[^\n]*\b(todo|task)\b", re.IGNORECASE)
 _MARK_DONE_PATTERN = re.compile(r"\bmark\b[^\n]+\bas\s+(?:done|complete|finished)\b", re.IGNORECASE)
 _COMPLETION_LEADING_PATTERN = re.compile(r"^\s*(?:to\s+)+", re.IGNORECASE)
@@ -23,7 +24,9 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     completion_request = _is_completion_request(lowered)
     completion_title = _extract_completion_title(message)
 
-    if _is_list_request(lowered):
+    if _is_find_request(lowered):
+        action = "find"
+    elif _is_list_request(lowered):
         action = "list"
     elif _is_delete_request(lowered):
         action = "delete"
@@ -38,6 +41,9 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     if completion_request and action == "update":
         payload["status"] = "completed"
 
+    if action == "find":
+        keywords = _extract_find_keywords(message)
+        payload["keywords"] = keywords or ""
     if action in {"update", "delete"}:
         trimmed_message = re.sub(
             r"^(?:update|delete|remove|complete|finish|mark)\s+(?:the\s+)?(?:todo|task)\s+",
@@ -109,6 +115,10 @@ def _is_list_request(lowered: str) -> bool:
     return any(phrase in lowered for phrase in ("show my todos", "show todos", "view my todos", "what are my todos"))
 
 
+def _is_find_request(lowered: str) -> bool:
+    return bool(_FIND_TODOS_PATTERN.search(lowered))
+
+
 def _is_delete_request(lowered: str) -> bool:
     return any(keyword in lowered for keyword in ("delete todo", "remove todo", "delete task", "remove task"))
 
@@ -139,3 +149,13 @@ def _extract_completion_title(message: str) -> Optional[str]:
 
 def _strip_completion_leading(text: str) -> str:
     return _COMPLETION_LEADING_PATTERN.sub("", (text or "")).strip()
+
+
+def _extract_find_keywords(message: str) -> str:
+    pattern = re.compile(r"\b(find|search|look\s*up|locate)\b\s*(?:for\s+)?(.+)", re.IGNORECASE)
+    match = pattern.search(message)
+    if not match:
+        return ""
+    keywords = match.group(2).strip()
+    keywords = re.sub(r"\b(todos?|tasks?)\b", "", keywords, flags=re.IGNORECASE).strip(" ,.-")
+    return keywords

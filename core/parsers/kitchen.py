@@ -56,6 +56,18 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
         payload["id"] = title
         return CommandResult(tool="kitchen_tips", payload=payload)
 
+    if "delete kitchen tip" in lowered or "remove kitchen tip" in lowered:
+        payload["action"] = "delete"
+        target = extract_title_from_text(message) or extract_after_keywords(message, ["tip", "about", "called"]) or message
+        payload["target_title"] = target.strip(' "')
+        return CommandResult(tool="kitchen_tips", payload=payload)
+
+    if "update kitchen tip" in lowered or "edit kitchen tip" in lowered:
+        payload["action"] = "update"
+        target = extract_title_from_text(message) or extract_after_keywords(message, ["tip", "about", "called"]) or message
+        payload["target_title"] = target.strip(' "')
+        return CommandResult(tool="kitchen_tips", payload=payload)
+
     return None
 
 

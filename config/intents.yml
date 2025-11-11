@@ -10,6 +10,7 @@ intents:
     description: "CRUD actions for the JSON-backed todo list."
     actions:
       - list
+      - find
       - create
       - update
       - delete

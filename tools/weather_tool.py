@@ -107,7 +107,7 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
 
-    city, default_note = _resolve_city(payload)
+    city = _resolve_city(payload)
 
     loc = geocode_city(city)
     if not loc:
@@ -124,6 +124,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         target_dt = _resolve_target_datetime(time_hint)
     else:
         target_dt = None
+    time_label = _describe_time_label(time_hint, target_dt)
 
     if target_dt:
         hourly = get_hourly_forecast(loc["lat"], loc["lon"])
@@ -133,8 +134,6 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if forecast_entry:
         notes = []
-        if default_note:
-            notes.append(default_note)
         return {
             "type": "weather",
             "city": loc["name"],
@@ -143,6 +142,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "timestamp": forecast_entry.get("time"),
             "mode": "forecast",
             "note": " ".join(notes) if notes else None,
+            "time_label": time_label,
         }
 
     wx = get_current_weather(loc["lat"], loc["lon"])
@@ -150,8 +150,6 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     code = wx.get("weather_code")
 
     notes: List[str] = []
-    if default_note:
-        notes.append(default_note)
     if target_dt and not forecast_entry:
         notes.append("Requested time is outside the available forecast; showing current conditions.")
     note = " ".join(notes) if notes else None
@@ -163,20 +161,21 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         "weather_code": code,
         "mode": "current",
         "note": note,
+        "time_label": time_label,
     }
 
 
-def _resolve_city(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
+def _resolve_city(payload: Dict[str, Any]) -> str:
     raw_city = str(payload.get("city") or payload.get("location") or "").strip()
     normalized = _normalize_city_name(raw_city)
     if normalized:
-        return normalized, None
+        return normalized
 
     inferred = _infer_city_from_message(payload.get("message"))
     if inferred:
-        return inferred, None
+        return inferred
 
-    return _DEFAULT_CITY, f"No city provided; defaulting to {_DEFAULT_CITY}."
+    return _DEFAULT_CITY
 
 
 def _normalize_city_name(candidate: str) -> str:
@@ -227,12 +226,21 @@ def format_weather_response(result: Dict[str, Any]) -> str:
     mode = result.get("mode", "current")
     timestamp = result.get("timestamp")
     note = result.get("note")
+    time_label = result.get("time_label")
 
-    if mode == "forecast" and timestamp:
-        time_text = _format_timestamp(timestamp)
-        header = f"Forecast for {city} at {time_text}"
+    if mode == "forecast":
+        if time_label:
+            header = f"Weather in {city} {time_label}"
+        elif timestamp:
+            time_text = _format_timestamp(timestamp)
+            header = f"Forecast for {city} at {time_text}"
+        else:
+            header = f"Forecast for {city}"
     else:
-        header = f"Weather in {city}"
+        if time_label:
+            header = f"Weather in {city} {time_label}"
+        else:
+            header = f"Weather in {city}"
 
     parts = [header]
     if temp is not None:
@@ -392,3 +400,47 @@ def _format_timestamp(timestamp: str) -> str:
     except ValueError:
         return timestamp
     return dt_obj.strftime("%b %d %H:%M")
+
+
+def _describe_time_label(time_hint: Optional[Dict[str, Any]], target_dt: Optional[datetime]) -> Optional[str]:
+    if not isinstance(time_hint, dict):
+        return None
+    day_hint = str(time_hint.get("day") or "").strip()
+    raw_hint = str(time_hint.get("raw") or "").strip()
+    hour = time_hint.get("hour")
+    minute = time_hint.get("minute")
+
+    parts: List[str] = []
+    if day_hint:
+        parts.append(day_hint)
+
+    time_fragment: Optional[str] = None
+    if hour is not None:
+        try:
+            hour_int = max(0, min(23, int(hour)))
+        except (TypeError, ValueError):
+            hour_int = None
+        if hour_int is not None:
+            minute_int = 0
+            if minute is not None:
+                try:
+                    minute_int = max(0, min(59, int(minute)))
+                except (TypeError, ValueError):
+                    minute_int = 0
+            time_fragment = f"{hour_int:02d}:{minute_int:02d}"
+    if time_fragment:
+        if parts:
+            parts.append(f"at {time_fragment}")
+        else:
+            parts.append(time_fragment)
+
+    if parts:
+        return " ".join(parts).strip()
+
+    if raw_hint:
+        return raw_hint
+
+    if target_dt:
+        return target_dt.strftime("%b %d %H:%M")
+
+    return None

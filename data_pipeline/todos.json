@@ -3,9 +3,9 @@
     {
       "id": "dc56d9d190f84f00a9cfa149e9833bd1",
       "title": "Tier X - apps integration",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2025-11-06T22:01:13.842217+00:00",
-      "updated_at": "2025-11-06T22:01:13.842217+00:00",
+      "updated_at": "2025-11-11T11:19:22.064483+00:00",
       "notes": [
         "integrate calendar events with iCal, SHC app, Min L\u00e6ge etc"
       ]
@@ -104,6 +104,41 @@
       "status": "pending",
       "created_at": "2025-11-10T23:35:56.570566+00:00",
       "updated_at": "2025-11-10T23:35:56.570566+00:00",
+      "deadline": "2025-11-11"
+    },
+    {
+      "id": "9b7a05b0ce7648dd97cf9241c21fd58a",
+      "title": "buy wine for dinner",
+      "status": "pending",
+      "created_at": "2025-11-11T11:58:27.060375+00:00",
+      "updated_at": "2025-11-11T11:58:27.060375+00:00",
+      "notes": [
+        "Check cellar, Pick from list"
+      ],
+      "deadline": "2025-11-08"
+    },
+    {
+      "id": "2953d7d90f86470b8b8995f483b63682",
+      "title": "add a todo tomorrow to add milk",
+      "status": "pending",
+      "created_at": "2025-11-11T16:02:06.630432+00:00",
+      "updated_at": "2025-11-11T16:02:06.630432+00:00",
+      "deadline": "2025-11-12"
+    },
+    {
+      "id": "45828778a7a241eda0fe4af558f6ea70",
+      "title": "add milk",
+      "status": "pending",
+      "created_at": "2025-11-11T16:03:01.199843+00:00",
+      "updated_at": "2025-11-11T16:03:01.199843+00:00",
+      "deadline": "2025-11-12"
+    },
+    {
+      "id": "b6d5f155c8134d8d9f8b76d6f8b9d5ab",
+      "title": "buy milk",
+      "status": "pending",
+      "created_at": "2025-11-11T16:16:23.543733+00:00",
+      "updated_at": "2025-11-11T16:16:23.543733+00:00",
       "deadline": "2025-11-11"
     }
   ]

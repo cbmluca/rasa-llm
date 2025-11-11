@@ -78,3 +78,39 @@ def test_kitchen_tips_create(tmp_path: Path, monkeypatch) -> None:
     )
     assert created["action"] == "create"
     assert created["tip"]["title"] == "Sear steaks hot"
+
+
+def test_kitchen_tips_update_and_delete(tmp_path: Path, monkeypatch) -> None:
+    storage_path = tmp_path / "kitchen_tips.json"
+    monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
+    payload = {
+        "tips": [
+            {
+                "id": "tip123",
+                "title": "Old title",
+                "body": "Old body",
+                "tags": ["legacy"],
+                "link": "https://example.com/old",
+            }
+        ]
+    }
+    storage_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    updated = kitchen_tips.run(
+        {
+            "action": "update",
+            "id": "tip123",
+            "title": "New title",
+            "body": "New body",
+            "tags": ["fresh"],
+            "link": "https://example.com/new",
+        }
+    )
+    assert updated["tip"]["title"] == "New title"
+    assert updated["tip"]["tags"] == ["fresh"]
+
+    deleted = kitchen_tips.run({"action": "delete", "id": "tip123"})
+    assert deleted["deleted"] is True
+
+    missing = kitchen_tips.run({"action": "delete", "id": "tip123"})
+    assert missing["error"] == "not_found"

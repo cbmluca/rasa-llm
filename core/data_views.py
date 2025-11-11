@@ -44,7 +44,8 @@ def review_pending_prompts(path: Path, limit: int = 10, page: int = 1) -> list[d
     if end <= 0:
         return []
     start = max(end - limit, 0)
-    return entries[start:end]
+    window = entries[start:end]
+    return list(reversed(window))
 
 
 def _write_csv(path: Path, rows: Sequence[dict]) -> None:

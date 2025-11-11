@@ -71,6 +71,58 @@ class KitchenTipsStore:
         self._write_entries(entries)
         return tip.to_dict()
 
+    def update_tip(
+        self,
+        *,
+        tip_id: Optional[str],
+        title_lookup: Optional[str],
+        new_title: Optional[str] = None,
+        body: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        link: Any = None,
+        link_provided: bool = False,
+    ) -> Dict[str, Any]:
+        entries = self._load_entries()
+        title_norm = title_lookup.strip().lower() if title_lookup else None
+        match: Optional[KitchenTip] = None
+        for entry in entries:
+            if tip_id and entry.id == tip_id:
+                match = entry
+                break
+            if title_norm and entry.title.strip().lower() == title_norm:
+                match = entry
+                break
+        if not match:
+            raise ValueError("not_found")
+        if new_title:
+            match.title = new_title
+        if body is not None:
+            match.body = body
+        if tags is not None:
+            match.tags = tags
+        if link_provided:
+            match.link = link or None
+        self._write_entries(entries)
+        return match.to_dict()
+
+    def delete_tip(self, *, tip_id: Optional[str], title_lookup: Optional[str]) -> bool:
+        entries = self._load_entries()
+        title_norm = title_lookup.strip().lower() if title_lookup else None
+        remaining: List[KitchenTip] = []
+        deleted = False
+        for entry in entries:
+            if not deleted and (
+                (tip_id and entry.id == tip_id)
+                or (title_norm and entry.title.strip().lower() == title_norm)
+            ):
+                deleted = True
+                continue
+            remaining.append(entry)
+        if not deleted:
+            return False
+        self._write_entries(remaining)
+        return True
+
     def _load_entries(self) -> List[KitchenTip]:
         payload = read_json(self._storage_path, {"tips": []})
         raw = payload.get("tips", [])
@@ -174,6 +226,48 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "count": len(tips),
         }
 
+    if action == "update":
+        tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
+        target_title = str(payload.get("target_title") or "").strip()
+        if not tip_id and not target_title:
+            return _error_response("update", "missing_id", "Provide a tip id or title to update.")
+        new_title = str(payload.get("title") or payload.get("new_title") or "").strip() or None
+        body_value = payload.get("body")
+        body = str(body_value).strip() if isinstance(body_value, str) else body_value
+        tags = payload.get("tags") if "tags" in payload else None
+        if tags is not None:
+            if not isinstance(tags, list):
+                return _error_response("update", "invalid_tags", "Tags must be provided as a list.")
+            tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+        link_provided = "link" in payload
+        link_value: Any = payload.get("link")
+        link_str = str(link_value).strip() if isinstance(link_value, str) else link_value
+        try:
+            updated = store.update_tip(
+                tip_id=tip_id or None,
+                title_lookup=target_title or None,
+                new_title=new_title,
+                body=body,
+                tags=tags,
+                link=link_str,
+                link_provided=link_provided,
+            )
+        except ValueError as exc:
+            if str(exc) == "not_found":
+                return _error_response("update", "not_found", "The requested tip was not found.")
+            raise
+        return {"type": "kitchen_tips", "domain": "kitchen", "action": "update", "tip": updated}
+
+    if action == "delete":
+        tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
+        target_title = str(payload.get("target_title") or payload.get("title") or "").strip()
+        if not tip_id and not target_title:
+            return _error_response("delete", "missing_id", "Provide a tip id or title to delete.")
+        deleted = store.delete_tip(tip_id=tip_id or None, title_lookup=target_title or None)
+        if not deleted:
+            return _error_response("delete", "not_found", "The requested tip was not found.")
+        return {"type": "kitchen_tips", "domain": "kitchen", "action": "delete", "deleted": True}
+
     return _error_response(action, "unsupported_action", f"Unsupported kitchen tips action '{action}'.")
 
 
@@ -202,6 +296,16 @@ def format_kitchen_tips_response(result: Dict[str, Any]) -> str:
             return _with_raw_output(f"No kitchen tips found for '{result.get('query')}'.", result)
         lines = [f"- {tip.get('title', 'Untitled')} (#{tip.get('id')})" for tip in tips]
         return _with_raw_output(f"Matches for '{result.get('query')}':\n" + "\n".join(lines), result)
+
+    if action == "update":
+        tip = result.get("tip") or {}
+        message = f"Updated kitchen tip '{tip.get('title', 'Tip')}'."
+        return _with_raw_output(message, result)
+
+    if action == "delete":
+        if result.get("deleted"):
+            return _with_raw_output("Kitchen tip deleted.", result)
+        return _with_raw_output("Kitchen tip delete failed.", result)
 
     return _with_raw_output("Kitchen tips request completed.", result)
 

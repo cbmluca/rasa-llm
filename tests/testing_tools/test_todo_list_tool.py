@@ -36,6 +36,26 @@ def test_todo_run_create_update_delete(tmp_path: Path, monkeypatch: pytest.Monke
     assert todo_list.run({"action": "list"})["count"] == 0
 
 
+def test_todo_run_find(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_path = tmp_path / "todos.json"
+    monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
+
+    todo_list.run({"action": "create", "title": "Buy milk"})
+    todo_list.run({"action": "create", "title": "Follow up with QA"})
+
+    found = todo_list.run({"action": "find", "keywords": "milk"})
+    assert found["action"] == "find"
+    assert found["count"] == 1
+    assert found["todos"][0]["title"] == "Buy milk"
+
+
+def test_todo_parser_detects_find_action() -> None:
+    parsed = parse_command("todo find milk")
+    assert parsed is not None
+    assert parsed.payload["action"] == "find"
+    assert parsed.payload["keywords"].lower() == "milk"
+
+
 def test_todo_integration_create_update_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)

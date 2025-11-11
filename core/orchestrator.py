@@ -196,6 +196,10 @@ class Orchestrator:
                         resolution_status = "router_error"
                         review_reason = "router_invalid_payload"
                     else:
+                        payload = dict(payload)
+                        for key, value in (normalized_entities or {}).items():
+                            payload.setdefault(key, value)
+                        payload.setdefault("message", raw_message)
                         tool_payload = payload
                         extras["invocation_source"] = "router"
                         extras["resolved_tool"] = tool_name
