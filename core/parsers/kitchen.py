@@ -45,13 +45,13 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     if ("share a kitchen tip" in lowered or ("kitchen tip" in lowered and "about" in lowered)) or (
         "search" in lowered and "kitchen" in lowered
     ):
-        payload["action"] = "search"
+        payload["action"] = "find"
         query = extract_after_keywords(message, ["about", "for"]) or extract_title_from_text(message) or message
         payload["query"] = query.strip(' "')
         return CommandResult(tool="kitchen_tips", payload=payload)
 
     if "get kitchen" in lowered or ("kitchen tip" in lowered and "list" not in lowered):
-        payload["action"] = "get"
+        payload["action"] = "find"
         title = extract_title_from_text(message) or message
         payload["id"] = title
         return CommandResult(tool="kitchen_tips", payload=payload)

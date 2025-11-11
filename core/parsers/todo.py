@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 from core.parser_utils import extract_after_keywords
 from core.parser_utils.datetime import find_date_in_text
@@ -151,11 +151,13 @@ def _strip_completion_leading(text: str) -> str:
     return _COMPLETION_LEADING_PATTERN.sub("", (text or "")).strip()
 
 
-def _extract_find_keywords(message: str) -> str:
-    pattern = re.compile(r"\b(find|search|look\s*up|locate)\b\s*(?:for\s+)?(.+)", re.IGNORECASE)
+def _extract_find_keywords(message: str, *, nouns: Sequence[str] | None = None) -> str:
+    terms = nouns or ['todos?', 'tasks?']
+    noun_pattern = "|".join(terms)
+    pattern = re.compile(rf"\b(find|search|look\s*up|locate)\b\s*(?:for\s+)?(?:(?:the|my)\s+)?(?:(?:{noun_pattern})\s+)?(.+)", re.IGNORECASE)
     match = pattern.search(message)
     if not match:
         return ""
     keywords = match.group(2).strip()
-    keywords = re.sub(r"\b(todos?|tasks?)\b", "", keywords, flags=re.IGNORECASE).strip(" ,.-")
+    keywords = re.sub(rf"\b(?:{noun_pattern})\b", "", keywords, flags=re.IGNORECASE).strip(" ,.-")
     return keywords

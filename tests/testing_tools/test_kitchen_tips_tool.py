@@ -8,7 +8,7 @@ from pathlib import Path
 from tools import kitchen_tips_tool as kitchen_tips
 
 
-def test_kitchen_tips_list_get_search(tmp_path: Path, monkeypatch) -> None:
+def test_kitchen_tips_list_find(tmp_path: Path, monkeypatch) -> None:
     storage_path = tmp_path / "kitchen_tips.json"
     monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
 
@@ -29,11 +29,11 @@ def test_kitchen_tips_list_get_search(tmp_path: Path, monkeypatch) -> None:
     listed = kitchen_tips.run({"action": "list"})
     assert listed["count"] == 2
 
-    fetched = kitchen_tips.run({"action": "get", "id": "boil_pasta"})
-    assert fetched["tip"]["title"] == "Boil pasta"
-    assert fetched["tip"]["link"] == "https://example.com/pasta"
+    fetched = kitchen_tips.run({"action": "find", "id": "boil_pasta"})
+    assert fetched["tips"][0]["title"] == "Boil pasta"
+    assert fetched["tips"][0]["link"] == "https://example.com/pasta"
 
-    search = kitchen_tips.run({"action": "search", "query": "herbs"})
+    search = kitchen_tips.run({"action": "find", "query": "herbs"})
     assert search["count"] == 1
     assert search["tips"][0]["id"] == "store_herbs"
 
@@ -43,14 +43,11 @@ def test_kitchen_tips_validation(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(kitchen_tips, "_DEFAULT_STORAGE_PATH", storage_path)
     storage_path.write_text(json.dumps({"tips": []}), encoding="utf-8")
 
-    missing = kitchen_tips.run({"action": "get"})
-    assert missing["error"] == "missing_id"
+    missing = kitchen_tips.run({"action": "find"})
+    assert missing["error"] == "missing_keywords"
 
-    unknown = kitchen_tips.run({"action": "get", "id": "missing"})
+    unknown = kitchen_tips.run({"action": "find", "id": "missing"})
     assert unknown["error"] == "not_found"
-
-    search = kitchen_tips.run({"action": "search"})
-    assert search["error"] == "missing_query"
 
 def test_kitchen_tips_formatter_is_clean(tmp_path: Path, monkeypatch) -> None:
     storage_path = tmp_path / "kitchen_tips.json"

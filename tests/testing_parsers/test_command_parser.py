@@ -1,3 +1,4 @@
+import core.parsers.calendar as calendar_parser
 from core.command_parser import parse_command
 
 
@@ -109,7 +110,7 @@ def test_share_kitchen_tip_maps_to_search():
     result = parse_command("Share a kitchen tip about cleaning cast iron pans.")
     assert result is not None
     assert result.tool == "kitchen_tips"
-    assert result.payload["action"] == "search"
+    assert result.payload["action"] == "find"
     assert "cast iron" in result.payload.get("query", "").lower()
 
 
@@ -133,14 +134,14 @@ def test_app_guide_question_defaults_to_list():
     result = parse_command("What App Guide sections do we have?")
     assert result is not None
     assert result.tool == "app_guide"
-    assert result.payload["action"] == "list"
+    assert result.payload["action"] == "find"
 
 
 def test_app_guide_update_detects_section_id():
     result = parse_command("Update the App Guide entry for tier_policies with a note about governance.")
     assert result is not None
     assert result.tool == "app_guide"
-    assert result.payload["action"] == "upsert"
+    assert result.payload["action"] == "update"
     assert result.payload.get("section_id") == "tier_policies"
 
 
@@ -148,5 +149,21 @@ def test_app_guide_get_with_quotes():
     result = parse_command('Get App Guide section "tier_policies"')
     assert result is not None
     assert result.tool == "app_guide"
-    assert result.payload["action"] == "get"
+    assert result.payload["action"] == "find"
     assert result.payload.get("section_id") == "tier_policies"
+
+
+def test_calendar_defaults_start_to_now(monkeypatch):
+    monkeypatch.setattr(calendar_parser, "_current_time_iso", lambda: "2025-01-02T03:04:00")
+    result = parse_command('Create an event called "Quick sync"')
+    assert result is not None
+    assert result.payload["action"] == "create"
+    assert result.payload.get("start") == "2025-01-02T03:04:00"
+
+
+def test_calendar_end_inherits_start_date():
+    result = parse_command("Schedule event 'Budget sync' on 1/2/2025 from 14 to 15 at HQ.")
+    assert result is not None
+    payload = result.payload
+    assert payload["start"].startswith("2025-02-01T14:00")
+    assert payload["end"].startswith("2025-02-01T15:00")

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.json_storage import atomic_write_json, read_json
+from core.tooling.query_helpers import best_effort_keywords, keyword_score, rank_entries, tokenize_keywords
 
 _DEFAULT_STORAGE_PATH = Path("data_pipeline/kitchen_tips.json")
 
@@ -46,17 +47,22 @@ class KitchenTipsStore:
         entries.sort(key=lambda tip: tip.title.lower())
         return [entry.to_dict() for entry in entries]
 
-    def search(self, query: str) -> List[Dict[str, Any]]:
-        if not query:
-            return []
-        term = query.lower()
-        matches = [
-            tip.to_dict()
-            for tip in self._load_entries()
-            if term in tip.title.lower() or term in tip.body.lower() or any(term in tag.lower() for tag in tip.tags)
-        ]
-        matches.sort(key=lambda tip: tip["title"].lower())
-        return matches
+    def search(self, keywords: str) -> List[Dict[str, Any]]:
+        tokens = tokenize_keywords(keywords)
+        entries = [entry.to_dict() for entry in self._load_entries()]
+        for entry in entries:
+            entry['_search_fields'] = ['title', 'body', 'tags']
+        ranked = rank_entries(entries, tokens, key=lambda tip: tip['title'].lower())
+        filtered: List[Dict[str, Any]] = []
+        for entry in ranked:
+            fields = entry.get('_search_fields', [])
+            if tokens:
+                score = keyword_score(entry, tokens, fields)
+                if score <= 0:
+                    continue
+            entry.pop('_search_fields', None)
+            filtered.append(entry)
+        return filtered
 
     def create_tip(self, title: str, body: Optional[str], tags: List[str], link: Optional[str]) -> Dict[str, Any]:
         entries = self._load_entries()
@@ -172,6 +178,8 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Handle kitchen tip lookup commands."""
 
     action = str(payload.get("action", "list")).strip().lower() or "list"
+    if action in {"search", "get"}:
+        action = "find"
     store = KitchenTipsStore()
 
     if action == "list":
@@ -182,6 +190,45 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "action": "list",
             "tips": tips,
             "count": len(tips),
+        }
+
+    if action == "find":
+        tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
+        title_lookup = str(payload.get("title") or payload.get("target_title") or "").strip()
+        if tip_id or title_lookup:
+            tip = store.find_by_id(tip_id) if tip_id else None
+            if not tip and title_lookup:
+                tip = store.find_by_title(title_lookup)
+            if not tip:
+                missing = tip_id or title_lookup
+                return _error_response("find", "not_found", f"Tip '{missing}' was not found.")
+            return {
+                "type": "kitchen_tips",
+                "domain": "kitchen",
+                "action": "find",
+                "tips": [tip],
+                "count": 1,
+                "query": tip_id or title_lookup,
+                "exact_match": True,
+            }
+        keywords = best_effort_keywords(payload, keys=("keywords", "query"))
+        query = str(payload.get("query", "")).strip()
+        search_term = query or keywords
+        if not search_term.strip():
+            return _error_response(
+                "find",
+                "missing_keywords",
+                "Provide keywords, a query, or a tip id/title to search your tips.",
+            )
+        tips = store.search(search_term)
+        return {
+            "type": "kitchen_tips",
+            "domain": "kitchen",
+            "action": "find",
+            "tips": tips,
+            "query": search_term,
+            "count": len(tips),
+            "exact_match": False,
         }
 
     if action == "create":
@@ -198,33 +245,6 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             link = str(link).strip()
         tip = store.create_tip(title=title, body=body, tags=tags_clean, link=link or None)
         return {"type": "kitchen_tips", "domain": "kitchen", "action": "create", "tip": tip}
-
-    if action == "get":
-        tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
-        title_lookup = payload.get("title")
-        if not tip_id and not title_lookup:
-            return _error_response("get", "missing_id", "A tip ID or title is required to fetch details.")
-        tip = store.find_by_id(tip_id) if tip_id else None
-        if not tip and title_lookup:
-            tip = store.find_by_title(str(title_lookup))
-        if not tip:
-            missing = tip_id or str(title_lookup or "tip")
-            return _error_response("get", "not_found", f"Tip '{missing}' was not found.")
-        return {"type": "kitchen_tips", "domain": "kitchen", "action": "get", "tip": tip}
-
-    if action == "search":
-        query = str(payload.get("query", "")).strip()
-        if not query:
-            return _error_response("search", "missing_query", "Provide a search phrase to filter tips.")
-        tips = store.search(query)
-        return {
-            "type": "kitchen_tips",
-            "domain": "kitchen",
-            "action": "search",
-            "query": query,
-            "tips": tips,
-            "count": len(tips),
-        }
 
     if action == "update":
         tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
@@ -285,17 +305,17 @@ def format_kitchen_tips_response(result: Dict[str, Any]) -> str:
         lines = [f"- {tip.get('title', 'Untitled')} (#{tip.get('id')})" for tip in tips]
         return _with_raw_output("Kitchen tips:\n" + "\n".join(lines), result)
 
-    if action == "get":
-        tip = result.get("tip") or {}
-        message = f"{tip.get('title', 'Tip')}:\n{tip.get('body', 'No details provided.')}"
-        return _with_raw_output(message, result)
-
-    if action == "search":
+    if action == "find":
         tips = result.get("tips") or []
+        query = result.get("query")
         if not tips:
-            return _with_raw_output(f"No kitchen tips found for '{result.get('query')}'.", result)
+            return _with_raw_output(f"No kitchen tips found for '{query or 'your search'}'.", result)
+        if result.get("exact_match"):
+            tip = tips[0]
+            message = f"{tip.get('title', 'Tip')}:\n{tip.get('body', 'No details provided.')}"
+            return _with_raw_output(message, result)
         lines = [f"- {tip.get('title', 'Untitled')} (#{tip.get('id')})" for tip in tips]
-        return _with_raw_output(f"Matches for '{result.get('query')}':\n" + "\n".join(lines), result)
+        return _with_raw_output(f"Matches for '{query}':\n" + "\n".join(lines), result)
 
     if action == "update":
         tip = result.get("tip") or {}

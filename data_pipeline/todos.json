@@ -23,12 +23,11 @@
     {
       "id": "852d311ce45340d5b5cf8ba59bd90e26",
       "title": "Check cellar",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2025-11-07T17:20:29.168609+00:00",
-      "updated_at": "2025-11-07T17:20:29.168609+00:00",
+      "updated_at": "2025-11-11T17:53:41.573792+00:00",
       "notes": [
-        "Check cellar",
-        "Pick from list"
+        "Check cellar, Pick from list"
       ],
       "deadline": "2025-11-08"
     },

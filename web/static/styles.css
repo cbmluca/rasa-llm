@@ -262,6 +262,36 @@ body {
   color: #9ca3af;
 }
 
+.datetime-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.datetime-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.datetime-controls input,
+.datetime-controls select {
+  flex: 1;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  padding: 8px;
+  background: rgba(15, 23, 42, 0.8);
+  color: #f8fafc;
+}
+
+.datetime-group {
+  display: flex;
+  gap: 6px;
+}
+
+.datetime-group select {
+  flex: 1;
+}
+
 .pending-item-actions {
   display: flex;
   justify-content: flex-end;
@@ -322,7 +352,7 @@ body {
 }
 
 .form-grid label,
-.field-grid label {
+.field-grid .field-wrapper {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -727,4 +757,58 @@ body {
     flex-wrap: wrap;
     justify-content: flex-end;
   }
+}
+#dynamic-field-grid.calendar-layout {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper {
+  min-width: 0;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="title"] {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-date"] {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-date"] {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="link"] {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="location"] {
+  grid-column: 4;
+  grid-row: 2;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-time"] {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-time"] {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="id"] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="notes"] {
+  grid-column: 1 / span 4;
+  grid-row: 3;
 }

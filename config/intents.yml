@@ -19,14 +19,16 @@ intents:
     description: "Search or list kitchen tips stored in the local catalog."
     actions:
       - list
-      - search
-      - get
+      - find
       - create
+      - update
+      - delete
   - name: calendar_edit
     tool: calendar_edit
     description: "Add, update, delete, or list calendar events."
     actions:
       - list
+      - find
       - create
       - update
       - delete
@@ -35,8 +37,9 @@ intents:
     description: "Modify or inspect the App Guide knowledge base."
     actions:
       - list
-      - get
-      - upsert
+      - find
+      - create
+      - update
       - delete
   - name: nlu_fallback
     tool: null

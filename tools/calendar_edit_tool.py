@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.json_storage import atomic_write_json, read_json
+from core.tooling.query_helpers import best_effort_keywords, rank_entries, tokenize_keywords
 from core.text_parsing import parse_datetime_hint
 
 _DEFAULT_STORAGE_PATH = Path("data_pipeline/calendar.json")
@@ -49,6 +50,16 @@ class CalendarStore:
         events = self._load_events()
         events.sort(key=lambda event: event.start)
         return [event.to_dict() for event in events]
+
+    def search_events(self, keywords: str) -> List[Dict[str, str]]:
+        tokens = tokenize_keywords(keywords)
+        events = [event.to_dict() for event in self._load_events()]
+        for event in events:
+            event['_search_fields'] = [event.get('title', ''), event.get('location', ''), event.get('notes', '')]
+        ranked = rank_entries(events, tokens, key=lambda ev: ev.get('start') or '')
+        for event in ranked:
+            event.pop('_search_fields', None)
+        return ranked
 
     def create_event(
         self,
@@ -210,6 +221,19 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "domain": "calendar",
             "action": "list",
             "events": events,
+            "count": len(events),
+        }
+    if action == "find":
+        keywords = str(payload.get("keywords", "")).strip()
+        if not keywords:
+            return _error_response("find", "missing_keywords", "Please include at least one keyword to search your calendar.")
+        events = store.search_events(keywords)
+        return {
+            "type": "calendar_edit",
+            "domain": "calendar",
+            "action": "find",
+            "events": events,
+            "query": keywords,
             "count": len(events),
         }
 

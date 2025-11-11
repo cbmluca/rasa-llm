@@ -1,9 +1,14 @@
 const POLL_INTERVAL_MS = 15000;
 const DEFAULT_INTENT_ACTIONS = {
   todo_list: ['list', 'find', 'create', 'update', 'delete'],
-  kitchen_tips: ['list', 'search', 'get', 'create'],
-  calendar_edit: ['list', 'create', 'update', 'delete'],
-  app_guide: ['list', 'get', 'upsert', 'delete'],
+  kitchen_tips: ['list', 'find', 'create', 'update', 'delete'],
+  calendar_edit: ['list', 'find', 'create', 'update', 'delete'],
+  app_guide: ['list', 'find', 'create', 'update', 'delete'],
+};
+
+const ACTION_ALIASES = {
+  kitchen_tips: { search: 'find', get: 'find' },
+  app_guide: { get: 'find', upsert: 'update', search: 'find' },
 };
 
 const FIELD_ORDER = [
@@ -39,8 +44,32 @@ const FIELD_LIBRARY = {
   body: { label: 'Body', type: 'textarea', placeholder: 'Details or body text' },
   notes: { label: 'Notes', type: 'textarea' },
   notes_append: { label: 'Append Notes', type: 'textarea' },
-  status: { label: 'Status', placeholder: 'pending / completed' },
-  priority: { label: 'Priority', placeholder: 'low / medium / high' },
+  status: {
+    label: 'Status',
+    control: () => {
+      const select = document.createElement('select');
+      select.innerHTML = `
+        <option value="">Select status</option>
+        <option value="pending">Pending</option>
+        <option value="completed">Completed</option>
+        <option value="pushed">Pushed</option>
+      `;
+      return select;
+    },
+  },
+  priority: {
+    label: 'Priority',
+    control: () => {
+      const select = document.createElement('select');
+      select.innerHTML = `
+        <option value="">Select priority</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      `;
+      return select;
+    },
+  },
   deadline: { label: 'Deadline', placeholder: 'YYYY-MM-DD' },
   start: { label: 'Start', placeholder: 'ISO datetime' },
   end: { label: 'End', placeholder: 'ISO datetime' },
@@ -74,30 +103,31 @@ const TOOL_EXTRA_FIELDS = {
 
 const TOOL_ACTION_FIELD_CONFIG = {
   kitchen_tips: {
+    list: { fields: [], required: [] },
+    find: { fields: ['keywords'], required: ['keywords'] },
     create: { fields: ['title', 'body', 'tags', 'link'], required: ['title', 'body'] },
     update: { fields: ['id', 'title', 'body', 'tags', 'link'], required: ['id'] },
     delete: { fields: ['id', 'title'], required: ['id'] },
-    search: { fields: ['query'], required: ['query'] },
-    get: { fields: ['id', 'title'], required: ['id'] },
-    list: { fields: [], required: [] },
   },
   todo_list: {
     list: { fields: [], required: [] },
     find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'deadline', 'priority', 'notes'], required: ['title'] },
-    delete: { fields: ['id', 'target_title'], required: ['id'] },
-    update: { fields: ['id', 'target_title', 'new_title', 'status', 'deadline', 'priority', 'notes'], required: ['id'] },
+    create: { fields: ['title', 'status', 'deadline', 'priority', 'notes'], required: ['title'] },
+    delete: { fields: ['id', 'title'], required: ['id'] },
+    update: { fields: ['id', 'title', 'status', 'deadline', 'priority', 'notes'], required: ['id'] },
   },
   calendar_edit: {
     list: { fields: [], required: [] },
+    find: { fields: ['keywords'], required: ['keywords'] },
     create: { fields: ['title', 'start', 'end', 'location', 'notes', 'link'], required: ['title', 'start'] },
     delete: { fields: ['id', 'title'], required: ['id'] },
     update: { fields: ['id', 'title', 'start', 'end', 'location', 'notes', 'link'], required: ['id'] },
   },
   app_guide: {
     list: { fields: [], required: [] },
-    get: { fields: ['section_id', 'title'], required: ['section_id'] },
-    upsert: { fields: ['section_id', 'title', 'content'], required: ['section_id', 'title', 'content'] },
+    find: { fields: ['keywords', 'section_id'], required: [] },
+    create: { fields: ['section_id', 'title', 'content'], required: ['section_id', 'title', 'content'] },
+    update: { fields: ['section_id', 'title', 'content'], required: ['section_id'] },
     delete: { fields: ['section_id', 'title'], required: ['section_id'] },
   },
 };
@@ -155,6 +185,25 @@ const ENTITY_FIELD_CONFIG = {
   },
 };
 
+const DATE_TIME_FIELD_CONFIG = {
+  time: { mode: 'weather', includeTime: true, defaultTime: '13:00' },
+  start: { mode: 'iso', includeTime: true, defaultTime: '09:00', split: true },
+  end: { mode: 'iso', includeTime: true, defaultTime: '10:00', split: true },
+  deadline: { mode: 'date', includeTime: false },
+};
+
+const CALENDAR_FIELD_LAYOUT = {
+  title: { column: '1', row: '1' },
+  'start-date': { column: '2', row: '1' },
+  'end-date': { column: '3', row: '1' },
+  link: { column: '4', row: '1' },
+  location: { column: '4', row: '2' },
+  'start-time': { column: '2', row: '2' },
+  'end-time': { column: '3', row: '2' },
+  id: { column: '1', row: '2' },
+  notes: { column: '1 / span 4', row: '3' },
+};
+
 const STORAGE_KEYS = {
   ACTIVE_PAGE: 'tier5_active_page',
   SCROLL_PREFIX: 'tier5_scroll_',
@@ -178,6 +227,7 @@ const state = {
   classifier: [],
   corrected: [],
   stats: {},
+  datetimeInputs: {},
   dataStores: {
     todos: [],
     calendar: [],
@@ -298,7 +348,45 @@ function switchPage(targetId) {
 
 function getActionsForIntent(intent) {
   if (!intent) return [];
-  return state.intentActions[intent] || DEFAULT_INTENT_ACTIONS[intent] || [];
+  const defaults = DEFAULT_INTENT_ACTIONS[intent] || [];
+  const configured = state.intentActions[intent] || [];
+  if (!configured.length) {
+    return defaults;
+  }
+  const result = [...defaults];
+  configured.forEach((action) => {
+    if (!result.includes(action)) {
+      result.push(action);
+    }
+  });
+  return result;
+}
+
+function normalizeActionName(intent, action) {
+  if (!action) return action;
+  const aliases = ACTION_ALIASES[intent];
+  if (!aliases) return action;
+  return aliases[action] || action;
+}
+
+function sanitizeIntentActions(raw = {}) {
+  const sanitized = {};
+  Object.entries(raw).forEach(([intent, actions]) => {
+    if (!Array.isArray(actions)) {
+      return;
+    }
+    const normalized = actions
+      .map((action) => normalizeActionName(intent, action))
+      .filter(Boolean);
+    const unique = Array.from(new Set(normalized));
+    const allowed = DEFAULT_INTENT_ACTIONS[intent];
+    if (allowed && allowed.length) {
+      sanitized[intent] = unique.filter((action) => allowed.includes(action));
+    } else {
+      sanitized[intent] = unique;
+    }
+  });
+  return sanitized;
 }
 
 function populateIntentOptions() {
@@ -472,6 +560,192 @@ function applyHydratedFields(fields) {
   });
 }
 
+function fieldHasValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function applyCalendarLayout(wrapper, key) {
+  if (!wrapper || state.selectedPrompt?.intent !== 'calendar_edit') {
+    return;
+  }
+  const layout = CALENDAR_FIELD_LAYOUT[key];
+  if (layout) {
+    wrapper.style.gridColumn = layout.column;
+    wrapper.style.gridRow = layout.row;
+  }
+}
+
+function ensureDateTimeState(field) {
+  if (!state.datetimeInputs[field]) {
+    state.datetimeInputs[field] = { dateValue: '', timeValue: '' };
+  }
+  return state.datetimeInputs[field];
+}
+
+function setDateTimePart(field, part, value) {
+  const target = ensureDateTimeState(field);
+  target[part] = value;
+}
+
+function applyDateTimeFieldValue(field, config) {
+  const baseDate = getBaseDate();
+  const stateValue = ensureDateTimeState(field);
+  if (config.mode === 'weather') {
+    const dateInfo = parseDateInput(stateValue.dateValue, baseDate);
+    const timeInfo = parseTimeInput(stateValue.timeValue);
+    const payload = {};
+    if (dateInfo.keyword) {
+      payload.day = dateInfo.keyword;
+    }
+    if (dateInfo.iso) {
+      payload.date = dateInfo.iso;
+    }
+    if (timeInfo.time) {
+      const [hour, minute] = timeInfo.time.split(':');
+      payload.hour = Number(hour);
+      payload.minute = Number(minute);
+    }
+    if (!Object.keys(payload).length && !stateValue.dateValue && !stateValue.timeValue) {
+      delete state.correctionFields[field];
+      return;
+    }
+    payload.raw = `${stateValue.dateValue || ''} ${stateValue.timeValue || ''}`.trim();
+    state.correctionFields[field] = payload;
+    return;
+  }
+  const dateInfo = parseDateInput(stateValue.dateValue, baseDate);
+  if (!dateInfo.iso) {
+    delete state.correctionFields[field];
+    return;
+  }
+  if (config.mode === 'date' || !config.includeTime) {
+    state.correctionFields[field] = dateInfo.iso;
+    return;
+  }
+  const timeInfo = parseTimeInput(stateValue.timeValue || config.defaultTime);
+  const timeValue = timeInfo.time || config.defaultTime;
+  state.correctionFields[field] = `${dateInfo.iso}T${timeValue}`;
+}
+
+function getBaseDate() {
+  const ts = state.selectedPrompt?.timestamp;
+  if (!ts) return new Date();
+  const parsed = new Date(ts);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function formatISODate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDisplayDate(date) {
+  return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' });
+}
+
+function addDays(date, amount) {
+  const clone = new Date(date.getTime());
+  clone.setDate(clone.getDate() + amount);
+  return clone;
+}
+
+function buildRelativeDateOptions(baseDate) {
+  const options = [];
+  const labels = [
+    { label: 'Today', offset: 0, keyword: 'today' },
+    { label: 'Tomorrow', offset: 1, keyword: 'tomorrow' },
+    { label: 'Yesterday', offset: -1, keyword: 'yesterday' },
+  ];
+  labels.forEach((entry) => {
+    const target = addDays(baseDate, entry.offset);
+    options.push({
+      label: entry.label,
+      iso: formatISODate(target),
+      keyword: entry.keyword,
+      display: formatDisplayDate(target),
+    });
+  });
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  weekdays.forEach((dayName) => {
+    const target = addDays(baseDate, (7 + weekdays.indexOf(dayName) - baseDate.getDay()) % 7 || 7);
+    options.push({
+      label: dayName,
+      iso: formatISODate(target),
+      keyword: dayName.toLowerCase(),
+      display: formatDisplayDate(target),
+    });
+  });
+  return options;
+}
+
+function buildRelativeTimeOptions(baseDate) {
+  const baseTime = baseDate.toTimeString().slice(0, 5);
+  return [
+    { label: 'Now', time: baseTime, keyword: 'now' },
+    { label: 'Morning', time: '09:00', keyword: 'morning' },
+    { label: 'Midday', time: '12:00', keyword: 'midday' },
+    { label: 'Afternoon', time: '15:00', keyword: 'afternoon' },
+    { label: 'Evening', time: '19:00', keyword: 'evening' },
+    { label: 'Night', time: '22:00', keyword: 'night' },
+  ];
+}
+
+function parseDateInput(value, baseDate) {
+  if (!value) return { iso: '', keyword: '', display: '' };
+  const trimmed = value.trim();
+  const options = buildRelativeDateOptions(baseDate);
+  const match = options.find((opt) => opt.label.toLowerCase() === trimmed.toLowerCase());
+  if (match) {
+    return { iso: match.iso, keyword: match.keyword, display: match.display, label: match.label };
+  }
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return { iso: trimmed, keyword: '', display: formatDisplayDate(new Date(trimmed)) };
+  }
+  const shortMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{4}))?$/);
+  if (shortMatch) {
+    const day = shortMatch[1].padStart(2, '0');
+    const month = shortMatch[2].padStart(2, '0');
+    const year = shortMatch[3] || String(baseDate.getFullYear());
+    const iso = `${year}-${month}-${day}`;
+    return { iso, keyword: '', display: `${day}/${month}` };
+  }
+  return { iso: '', keyword: trimmed.toLowerCase(), display: trimmed, label: trimmed };
+}
+
+function parseTimeInput(value) {
+  if (!value) return { time: '', keyword: '' };
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{1,2})(?::(\d{2}))?$/);
+  if (match) {
+    const hour = match[1].padStart(2, '0');
+    const minute = (match[2] || '00').padStart(2, '0');
+    return { time: `${hour}:${minute}`, keyword: '' };
+  }
+  const lower = trimmed.toLowerCase();
+  const map = {
+    morning: '09:00',
+    midday: '12:00',
+    afternoon: '15:00',
+    evening: '19:00',
+    night: '22:00',
+  };
+  if (map[lower]) {
+    return { time: map[lower], keyword: lower };
+  }
+  if (lower === 'now') {
+    const now = new Date();
+    return { time: now.toTimeString().slice(0, 5), keyword: 'now' };
+  }
+  return { time: '', keyword: lower };
+}
+
 function hydrateEntitySelection(tool, entityId) {
   const config = ENTITY_FIELD_CONFIG[tool];
   if (!config || !entityId) {
@@ -592,6 +866,185 @@ function renderPendingList() {
   renderPendingMeta();
 }
 
+function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, isRequired = false) {
+  const baseDate = getBaseDate();
+  const stateValue = ensureDateTimeState(field);
+  const rawValue = state.correctionFields[field];
+  if (!stateValue.dateValue && rawValue) {
+    if (config.mode === 'weather') {
+      let parsed = rawValue;
+      if (typeof rawValue === 'string') {
+        try {
+          parsed = JSON.parse(rawValue);
+        } catch (err) {
+          parsed = { raw: rawValue };
+        }
+      }
+      if (parsed?.day) {
+        stateValue.dateValue = parsed.day.replace(/_/g, ' ');
+      } else if (parsed?.raw) {
+        stateValue.dateValue = parsed.raw;
+      }
+      if (typeof parsed?.hour === 'number') {
+        const hour = String(parsed.hour).padStart(2, '0');
+        const minute = typeof parsed?.minute === 'number' ? String(parsed.minute).padStart(2, '0') : '00';
+        stateValue.timeValue = `${hour}:${minute}`;
+      }
+    } else if (typeof rawValue === 'string' && rawValue.includes('T')) {
+      const [datePart, timePart] = rawValue.split('T');
+      stateValue.dateValue = datePart;
+      stateValue.timeValue = timePart?.slice(0, 5) || '';
+    } else if (typeof rawValue === 'string') {
+      stateValue.dateValue = rawValue;
+    } else if (typeof rawValue === 'object') {
+      if (rawValue.start || rawValue.date) {
+        const iso = rawValue.start || rawValue.date;
+        if (iso.includes('T')) {
+          const [datePart, timePart] = iso.split('T');
+          stateValue.dateValue = datePart;
+          stateValue.timeValue = timePart?.slice(0, 5) || '';
+        }
+      }
+    }
+  }
+  if (!stateValue.dateValue && isRequired) {
+    stateValue.dateValue = 'Today';
+  }
+  if (!stateValue.timeValue && config.includeTime && config.defaultTime && isRequired) {
+    stateValue.timeValue = config.defaultTime;
+  }
+
+  const trackedWrappers = [];
+  const updateRequiredState = () => {
+    if (!isRequired) return;
+    const hasValue = fieldHasValue(state.correctionFields[field]);
+    trackedWrappers
+      .filter(Boolean)
+      .forEach((wrapper) => wrapper.classList.toggle('field-required', !hasValue));
+  };
+
+  const buildDateInput = () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = stateValue.dateValue || '';
+    const listId = `${field}-date-options-${state.selectedPromptId || 'global'}`;
+    input.setAttribute('list', listId);
+    const dataList = document.createElement('datalist');
+    dataList.id = listId;
+    buildRelativeDateOptions(baseDate).forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = opt.label;
+      option.label = `${opt.label} (${opt.display})`;
+      dataList.appendChild(option);
+    });
+    input.addEventListener('focus', () => {
+      input.dataset.prevValue = input.value;
+      input.value = '';
+    });
+    input.addEventListener('blur', () => {
+      if (!input.value && input.dataset.prevValue) {
+        input.value = input.dataset.prevValue;
+      }
+      delete input.dataset.prevValue;
+    });
+    input.addEventListener('input', () => {
+      stateValue.dateValue = input.value;
+      applyDateTimeFieldValue(field, config);
+      updateRequiredState();
+    });
+    const wrapper = document.createElement('div');
+    wrapper.className = 'datetime-single';
+    wrapper.appendChild(input);
+    wrapper.appendChild(dataList);
+    return wrapper;
+  };
+
+  const buildTimeInput = () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = stateValue.timeValue || '';
+    const listId = `${field}-time-options-${state.selectedPromptId || 'global'}`;
+    input.setAttribute('list', listId);
+    const dataList = document.createElement('datalist');
+    dataList.id = listId;
+    buildRelativeTimeOptions(baseDate).forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = opt.label;
+      option.label = `${opt.label} (${opt.time})`;
+      dataList.appendChild(option);
+    });
+    input.addEventListener('focus', () => {
+      input.dataset.prevValue = input.value;
+      input.value = '';
+    });
+    input.addEventListener('blur', () => {
+      if (!input.value && input.dataset.prevValue) {
+        input.value = input.dataset.prevValue;
+      }
+      delete input.dataset.prevValue;
+    });
+    input.addEventListener('input', () => {
+      stateValue.timeValue = input.value || (isRequired ? config.defaultTime || '' : '');
+      applyDateTimeFieldValue(field, config);
+      updateRequiredState();
+    });
+    const wrapper = document.createElement('div');
+    wrapper.className = 'datetime-single';
+    wrapper.appendChild(input);
+    wrapper.appendChild(dataList);
+    return wrapper;
+  };
+
+  if (config.split) {
+    const dateWrapper = document.createElement('div');
+    dateWrapper.className = 'field-wrapper datetime-field';
+    dateWrapper.dataset.field = `${field}-date`;
+    const dateLabel = document.createElement('span');
+    dateLabel.textContent = `${FIELD_LIBRARY[field]?.label || field} Date`;
+    dateWrapper.appendChild(dateLabel);
+    dateWrapper.appendChild(buildDateInput());
+    applyCalendarLayout(dateWrapper, `${field}-date`);
+    targetGrid.appendChild(dateWrapper);
+    trackedWrappers.push(dateWrapper);
+
+    let timeWrapper = null;
+    if (config.includeTime) {
+      timeWrapper = document.createElement('div');
+      timeWrapper.className = 'field-wrapper datetime-field';
+      timeWrapper.dataset.field = `${field}-time`;
+      const timeLabel = document.createElement('span');
+      timeLabel.textContent = `${FIELD_LIBRARY[field]?.label || field} Time`;
+      timeWrapper.appendChild(timeLabel);
+      timeWrapper.appendChild(buildTimeInput());
+      applyCalendarLayout(timeWrapper, `${field}-time`);
+      targetGrid.appendChild(timeWrapper);
+      trackedWrappers.push(timeWrapper);
+    }
+    applyDateTimeFieldValue(field, config);
+    updateRequiredState();
+    return;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-wrapper datetime-field';
+  wrapper.dataset.field = field;
+  const mainLabel = document.createElement('span');
+  mainLabel.textContent = FIELD_LIBRARY[field]?.label || field;
+  wrapper.appendChild(mainLabel);
+  const controls = document.createElement('div');
+  controls.className = 'datetime-controls';
+  controls.appendChild(buildDateInput());
+  if (config.includeTime) {
+    controls.appendChild(buildTimeInput());
+  }
+  wrapper.appendChild(controls);
+  applyCalendarLayout(wrapper, field);
+  targetGrid.appendChild(wrapper);
+  trackedWrappers.push(wrapper);
+  applyDateTimeFieldValue(field, config);
+  updateRequiredState();
+}
+
 function normalizeFormFields(payload) {
   const normalized = {};
   Object.entries(payload || {}).forEach(([key, value]) => {
@@ -709,7 +1162,7 @@ function isFieldRequired(tool, action, field) {
   if (tool === 'kitchen_tips' && action !== 'create') {
     return false;
   }
-  if (tool === 'app_guide' && action !== 'upsert') {
+  if (tool === 'app_guide' && action !== 'create') {
     return false;
   }
   return true;
@@ -717,26 +1170,50 @@ function isFieldRequired(tool, action, field) {
 
 function renderDynamicFields(tool, action) {
   if (!el.dynamicFieldGrid) return;
-  el.dynamicFieldGrid.innerHTML = '';
+  const normalizedAction = normalizeActionName(tool, action);
+  const targetGrid = el.dynamicFieldGrid;
+  targetGrid.innerHTML = '';
+  targetGrid.classList.toggle('calendar-layout', tool === 'calendar_edit');
   const requiresActionFirst = !!TOOL_ACTION_FIELD_CONFIG[tool];
   if (!tool || !state.selectedPrompt) {
     return;
   }
-  if (requiresActionFirst && !action) {
+  if (requiresActionFirst && !normalizedAction) {
+    targetGrid.innerHTML = '<p class="hint">Select an action to edit fields.</p>';
     return;
   }
-  const fields = computeFieldList(tool, action, state.correctionFields);
+  const fields = computeFieldList(tool, normalizedAction, state.correctionFields);
   if (!fields.length) {
+    targetGrid.innerHTML = '<p class="hint">No fields available for this action.</p>';
     return;
+  }
+  if (tool === 'calendar_edit') {
+    const order = ['title', 'start', 'end', 'link', 'location', 'start_time', 'end_time', 'id', 'notes'];
+    const orderIndex = (value) => {
+      const idx = order.indexOf(value);
+      if (idx === -1) {
+        const fallback = FIELD_ORDER.indexOf(value);
+        return order.length + (fallback === -1 ? order.length : fallback);
+      }
+      return idx;
+    };
+    fields.sort((a, b) => orderIndex(a) - orderIndex(b));
   }
   fields.forEach((field) => {
     const config = FIELD_LIBRARY[field] || { label: field };
-    const wrapper = document.createElement('label');
+    const required = isFieldRequired(tool, normalizedAction, field);
+    const dateTimeConfig = DATE_TIME_FIELD_CONFIG[field];
+    if (dateTimeConfig) {
+      renderDateTimeField(field, dateTimeConfig, targetGrid, required);
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'field-wrapper';
+    wrapper.dataset.field = field;
     const label = document.createElement('span');
     label.textContent = config.label || field;
     wrapper.appendChild(label);
-    const required = isFieldRequired(tool, action, field);
-    if (required && !(state.correctionFields[field]?.trim())) {
+    if (required && !fieldHasValue(state.correctionFields[field])) {
       wrapper.classList.add('field-required');
     }
     const entityConfig = ENTITY_FIELD_CONFIG[tool];
@@ -772,19 +1249,23 @@ function renderDynamicFields(tool, action) {
         if (value) {
           state.correctionFields[field] = value;
           hydrateEntitySelection(tool, value);
-          renderDynamicFields(tool, action);
+          renderDynamicFields(tool, normalizedAction);
         } else {
           delete state.correctionFields[field];
         }
         updateCorrectButtonState();
       });
       wrapper.appendChild(select);
-      el.dynamicFieldGrid.appendChild(wrapper);
+      if (tool === 'calendar_edit') {
+        applyCalendarLayout(wrapper, field);
+      }
+      targetGrid.appendChild(wrapper);
       return;
     }
 
     const control =
-      config.type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
+      config.control?.() ||
+      (config.type === 'textarea' ? document.createElement('textarea') : document.createElement('input'));
     control.value = state.correctionFields[field] ?? '';
     if (config.placeholder) {
       control.placeholder = config.placeholder;
@@ -792,7 +1273,7 @@ function renderDynamicFields(tool, action) {
     control.addEventListener('input', (event) => {
       state.correctionFields[field] = event.target.value;
       updateCorrectButtonState();
-      if (isFieldRequired(tool, action, field)) {
+      if (isFieldRequired(tool, normalizedAction, field)) {
         if (event.target.value.trim()) {
           wrapper.classList.remove('field-required');
         } else {
@@ -801,7 +1282,10 @@ function renderDynamicFields(tool, action) {
       }
     });
     wrapper.appendChild(control);
-    el.dynamicFieldGrid.appendChild(wrapper);
+    if (tool === 'calendar_edit') {
+      applyCalendarLayout(wrapper, field);
+    }
+    targetGrid.appendChild(wrapper);
   });
 }
 
@@ -843,7 +1327,7 @@ function updateCorrectButtonState() {
   const requiredFields = (TOOL_REQUIRED_FIELDS[tool] || []).filter((field) =>
     isFieldRequired(tool, action, field),
   );
-  const missingField = requiredFields.some((field) => !(state.correctionFields[field]?.trim()));
+  const missingField = requiredFields.some((field) => !fieldHasValue(state.correctionFields[field]));
   const needsAction = getActionsForIntent(tool).length > 0;
   const ready = Boolean(reviewerIntent && (!needsAction || action) && !missingField);
   el.correctButton.disabled = !ready;
@@ -910,7 +1394,12 @@ function renderCorrectionForm() {
   const reviewerIntent = state.selectedPrompt.intent || '';
   el.intentSelect.value = reviewerIntent;
   const predicted = state.selectedPrompt.predicted_payload_raw || {};
-  updateActionSelectOptions(reviewerIntent, predicted.action);
+  const normalizedAction = normalizeActionName(reviewerIntent, predicted.action);
+  if (normalizedAction !== predicted.action) {
+    predicted.action = normalizedAction;
+    state.selectedPrompt.predicted_payload_raw = predicted;
+  }
+  updateActionSelectOptions(reviewerIntent, normalizedAction);
   renderDynamicFields(reviewerIntent, el.actionSelect.value);
   renderVersionHistory();
   updateCorrectButtonState();
@@ -919,10 +1408,15 @@ function renderCorrectionForm() {
 function selectPendingPrompt(item) {
   state.selectedPromptId = item.prompt_id;
   const predicted = item.predicted_payload || item.parser_payload || {};
+  const normalizedAction = normalizeActionName(item.intent, predicted.action);
+  if (normalizedAction && normalizedAction !== predicted.action) {
+    predicted.action = normalizedAction;
+  }
   state.selectedPrompt = {
     ...item,
     predicted_payload_raw: predicted,
   };
+  state.datetimeInputs = {};
   state.correctionFields = normalizeParserFieldsWithWhitelist(item.intent, predicted);
   renderPendingList();
   renderCorrectionForm();
@@ -1232,9 +1726,9 @@ async function mutateStore(store, payload) {
 async function loadIntents() {
   try {
     const data = await fetchJSON('/api/intents');
-  state.intents = data.intents || [];
-  state.intentActions = data.actions || {};
-  populateIntentOptions();
+    state.intents = data.intents || [];
+    state.intentActions = sanitizeIntentActions(data.actions || {});
+    populateIntentOptions();
   } catch (err) {
     console.warn('Failed to load intents', err);
   }
