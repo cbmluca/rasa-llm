@@ -290,6 +290,14 @@ def _filter_allowed_sources(items: List[Dict[str, str]]) -> List[Dict[str, str]]
 
 # --- Execution logic -------------------------------------------------------
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
+    """Aggregate breaking news articles for the requested topic.
+
+    WHAT: query upstream providers (NewsAPI/Google) and summarize findings.
+    WHY: deterministic tool responses keep Tier‑1 reviewable and allow the
+    router to reuse the same path when a prompt is escalated.
+    HOW: normalize the topic, call the provider clients, and return both
+    formatted markdown + raw article payloads.
+    """
     """Return curated headlines for the requested ``topic``."""
 
     message_text = payload.get("message")

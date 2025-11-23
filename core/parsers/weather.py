@@ -50,10 +50,12 @@ _CITY_STOP_WORDS = {
 
 
 def matches(lowered: str) -> bool:
+    """Return True when the utterance clearly references weather terms."""
     return contains_keyword(lowered, WEATHER_KEYWORDS)
 
 
 def parse(message: str) -> Optional[CommandResult]:
+    """Extract city/time hints so the weather tool can run deterministically."""
     payload: Dict[str, object] = {"message": message, "domain": "weather"}
     city = _extract_city(message)
     if city:
@@ -68,6 +70,7 @@ def parse(message: str) -> Optional[CommandResult]:
 
 
 def _extract_city(message: str) -> Optional[str]:
+    """Scan for city tokens after prepositions or before "weather" keywords."""
     for pattern in (_CITY_PREP_PATTERN, _CITY_BEFORE_KEYWORD_PATTERN):
         match = pattern.search(message)
         if not match:
@@ -85,6 +88,7 @@ def _extract_city(message: str) -> Optional[str]:
 
 
 def _strip_city_stop_words(candidate: str) -> Optional[str]:
+    """Remove trailing stop words ("weather", day names) from city guesses."""
     chunk = candidate.strip(" ,;:!?")
     if not chunk:
         return None
@@ -101,6 +105,7 @@ def _strip_city_stop_words(candidate: str) -> Optional[str]:
 
 
 def _remove_trailing_phrases(value: str) -> str:
+    """Trim phrases like "right now" from the city fragment."""
     phrases = (
         "right now",
         "right",
@@ -131,6 +136,7 @@ def _remove_trailing_phrases(value: str) -> str:
 
 
 def _extract_time_hint(message: str) -> Optional[Dict[str, object]]:
+    """Return structured time info (day/hour/minute) when present."""
     lowered = message.lower()
     rel_match = _RELATIVE_TIME_PATTERN.search(lowered)
     time_match = _TIME_PATTERN.search(lowered)
@@ -159,6 +165,7 @@ def _extract_time_hint(message: str) -> Optional[Dict[str, object]]:
 
 
 def _parse_time_components(time_value: str, ampm: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+    """Normalize "10", "10:30pm" etc. into 24h components."""
     if not time_value:
         return None, None
 

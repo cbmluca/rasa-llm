@@ -66,6 +66,7 @@ class CorrectionPayload(BaseModel):
 
 
 def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
+    """Translate ``OrchestratorResponse`` into the JSON schema the UI expects."""
     return {
         "reply": result.text,
         "user_text": result.user_text,
@@ -86,6 +87,7 @@ def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
 
 
 def _read_json_if_exists(path: Path) -> Any:
+    """Utility wrapper that tolerates absent/corrupt JSON during bootstraps."""
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as handle:
@@ -105,6 +107,17 @@ def create_app(
     static_dir: Optional[Path] = None,
     export_dir: Optional[Path] = None,
 ) -> FastAPI:
+    """Instantiate the FastAPI app and expose orchestrator-backed endpoints.
+
+    WHAT: load persisted queues/logs, mount static Tier‑5 assets, and register
+    all CRUD/chat endpoints needed by the reviewer UI.
+    WHY: the API is the sole bridge between Tier‑1 runtime state and the
+    JavaScript dashboard; documenting its wiring clarifies which paths produce
+   /consume JSONL files.
+    HOW: accept optional dependency overrides for tests, run the legacy
+    migrations (rehydrate/dedupe), and stash paths on ``app.state`` so route
+    handlers can mutate them without global singletons.
+    """
     orch = orchestrator or build_orchestrator()
     pending = pending_path or get_review_queue_path()
     labeled = labeled_path or get_labeled_queue_path()
@@ -133,6 +146,7 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
+        """Serve the compiled Tier‑5 dashboard."""
         index_path = app.state.static_root / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=404, detail="Web UI assets are missing. Run Tier-5 build.")
@@ -140,6 +154,7 @@ def create_app(
 
     @app.get("/api/health")
     def health_check() -> Dict[str, Any]:
+        """Simple uptime probe consumed by deploy tooling."""
         return {
             "status": "ok",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
@@ -147,6 +162,7 @@ def create_app(
 
     @app.post("/api/chat")
     def chat(payload: ChatRequest) -> Dict[str, Any]:
+        """Forward chat prompts to the orchestrator and enqueue pending items."""
         message = payload.message.strip()
         if not message:
             raise HTTPException(status_code=400, detail="Message is required.")
@@ -180,6 +196,7 @@ def create_app(
 
     @app.get("/api/logs/pending")
     def pending_logs(limit: int = 25, page: int = 1) -> Dict[str, Any]:
+        """Return paginated pending prompts for the correction queue."""
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
@@ -198,6 +215,7 @@ def create_app(
 
     @app.get("/api/logs/classifier")
     def classifier_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
+        """Expose low-confidence classifier turns for manual review."""
         findings = review_classifier_predictions(
             turn_log=app.state.turn_log_path,
             labeled_path=app.state.labeled_path,
@@ -208,11 +226,13 @@ def create_app(
 
     @app.get("/api/logs/labeled")
     def labeled_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
+        """Stream historic labeled prompts so the Training tab can load batches."""
         records = load_labeled_prompts(app.state.labeled_path, limit=max(1, min(limit, 200)), intent=intent)
         return {"items": records}
 
     @app.get("/api/logs/corrected")
     def corrected_logs(limit: int = 25, page: int = 1, intent: Optional[str] = None) -> Dict[str, Any]:
+        """Paginate the labeled JSONL file for the Labeled Prompt Pairs table."""
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         data = load_corrected_prompts(
@@ -225,6 +245,7 @@ def create_app(
 
     @app.delete("/api/logs/corrected/{record_id}")
     def delete_corrected(record_id: str) -> Dict[str, Any]:
+        """Trim a labeled prompt pair so experiments can discard test entries."""
         if not record_id:
             raise HTTPException(status_code=400, detail="record_id is required.")
         corrected_path = app.state.corrected_path
@@ -248,6 +269,7 @@ def create_app(
 
     @app.post("/api/logs/label")
     def label_prompt(payload: CorrectionPayload) -> Dict[str, Any]:
+        """Persist reviewer corrections and optionally run the underlying tool."""
         reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
         corrected_payload = dict(payload.corrected_payload or {})
         if reviewer_action:
@@ -305,6 +327,7 @@ def create_app(
 
     @app.delete("/api/logs/pending/{prompt_id}")
     def delete_pending(prompt_id: str) -> Dict[str, Any]:
+        """Remove a pending entry when reviewers discard it from the UI."""
         if not prompt_id:
             raise HTTPException(status_code=400, detail="prompt_id is required.")
         removed = delete_pending_entry(app.state.pending_path, prompt_id)
@@ -314,6 +337,7 @@ def create_app(
 
     @app.get("/api/intents")
     def list_intents() -> Dict[str, Any]:
+        """Return the configured intents/actions to populate dropdowns."""
         config = load_intent_config()
         return {
             "intents": config.names(),
@@ -322,6 +346,7 @@ def create_app(
 
     @app.post("/api/logs/export")
     def export_prompts(fmt: str = "csv", dedupe: bool = True) -> Dict[str, Any]:
+        """Dump the pending queue so analysts can copy snapshots out of band."""
         fmt = fmt.lower()
         if fmt not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -347,6 +372,7 @@ def create_app(
 
     @app.post("/api/logs/import")
     async def import_labels(file: UploadFile = File(...), fmt: str = Form("csv"), dedupe: bool = Form(True)) -> Dict[str, Any]:
+        """Allow reviewers to bulk-import CSV/JSON label files."""
         fmt_value = fmt.lower()
         if fmt_value not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -371,6 +397,7 @@ def create_app(
 
     @app.get("/api/data/{store_id}")
     def list_store(store_id: str) -> Dict[str, Any]:
+        """Proxy Tier-3 tool list actions so the Data Stores tab stays live."""
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -380,6 +407,7 @@ def create_app(
 
     @app.post("/api/data/{store_id}")
     def mutate_store(store_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Expose a thin CRUD endpoint for quick in-browser store edits."""
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -394,6 +422,7 @@ def create_app(
 
     @app.get("/api/stats")
     def stats() -> Dict[str, Any]:
+        """Aggregate queue/label counters for the dashboard overview cards."""
         pending_summary = summarize_pending_queue(app.state.pending_path)
         corrected_count = count_jsonl_rows(app.state.corrected_path)
         classifier_report = _read_json_if_exists(Path("reports/intent_classifier.json"))

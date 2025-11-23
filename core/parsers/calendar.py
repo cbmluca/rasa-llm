@@ -28,10 +28,12 @@ _CALENDAR_UPDATE_VERBS = ("update", "reschedule", "move", "shift", "change")
 
 
 def matches(lowered: str) -> bool:
+    """Fast keyword guard before running heavy calendar parsing heuristics."""
     return "calendar" in lowered or "event" in lowered or "meeting" in lowered
 
 
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
+    """Extract calendar CRUD payloads from natural language prompts."""
     payload: Dict[str, object] = {"message": message, "domain": "calendar"}
 
     action = _detect_action(lowered)
@@ -99,6 +101,7 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
 
 
 def _detect_action(lowered: str) -> Optional[str]:
+    """Choose between list/find/create/update/delete verbs."""
     if "calendar list" in lowered or lowered.strip().endswith("calendar") or (
         "list" in lowered and ("calendar" in lowered or "event" in lowered)
     ):
@@ -121,6 +124,7 @@ def _detect_action(lowered: str) -> Optional[str]:
 
 
 def _extract_calendar_title(message: str) -> Optional[str]:
+    """Try several patterns to recover the event title."""
     fancy_quotes = re.findall(r"[“\"]([^”\"]+)[”\"]", message)
     if fancy_quotes:
         return fancy_quotes[0].strip()
@@ -144,12 +148,14 @@ def _extract_calendar_title(message: str) -> Optional[str]:
 
 
 def _looks_like_time_expression(value: str) -> bool:
+    """Return True if the snippet contains recognizable time tokens."""
     if not value:
         return False
     return bool(_TIME_TOKEN_PATTERN.search(value))
 
 
 def _infer_calendar_times(message: str) -> Tuple[Optional[str], Optional[str]]:
+    """Infer start/end datetimes from ranges or part-of-day hints."""
     if not message:
         return None, None
     range_match = _CALENDAR_TIME_RANGE_PATTERN.search(message)
@@ -174,12 +180,14 @@ def _infer_calendar_times(message: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _clean_calendar_context(text: str) -> str:
+    """Strip leading prepositions so date parsing works."""
     if not text:
         return ""
     return re.sub(r"^(?:on|at|for)\s+", "", text.strip(), flags=re.IGNORECASE)
 
 
 def _extract_location_hint(message: str) -> Optional[str]:
+    """Guess event location from "at <place>" phrases."""
     match = re.search(r"at\s+((?:the\s+)?[A-Za-z0-9 .'-]+)", message, re.IGNORECASE)
     if not match:
         return None
@@ -192,6 +200,7 @@ def _extract_location_hint(message: str) -> Optional[str]:
 
 
 def _extract_find_keywords(message: str) -> str:
+    """Return raw text after "find" to drive keyword searches."""
     match = re.search(r"find\s+(?:calendar\s+|event\s+|meeting\s+)?(.+)", message, re.IGNORECASE)
     if not match:
         return message.strip()

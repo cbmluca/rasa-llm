@@ -19,6 +19,7 @@ from tools import (
 
 
 def load_all_core_tools(registry: ToolRegistry) -> None:
+    """WHAT: register built-in tools, WHY: single source, HOW: registry hooks."""
     # Register every core tool with ``registry``
     registry.register_tool("weather", weather_tool.run)
     registry.register_tool("news", news_tool.run)

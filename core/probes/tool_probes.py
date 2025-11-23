@@ -14,6 +14,8 @@ from core.tooling.query_helpers import tokenize_keywords
 
 @dataclass
 class ProbeResult:
+    """Summarize the probe's decision plus the matching entities."""
+
     decision: str  # "find", "list", "answer"
     query: str
     matches: List[Dict[str, Any]]
@@ -130,6 +132,7 @@ _PROBED_TOOLS = {
 
 
 def run_tool_probe(tool_name: str, message: str, payload: Dict[str, Any]) -> Optional[ProbeResult]:
+    """Heuristic search that finds likely entities before escalating to the LLM."""
     runner = _PROBED_TOOLS.get(tool_name)
     if not runner:
         return None

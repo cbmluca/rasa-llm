@@ -105,6 +105,15 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 
 # --- Orchestrator-facing tool functions ------------------------------------
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
+    """Fetch weather data from Open-Meteo and normalize it for Tier‑1.
+
+    WHAT: geocode user-provided city/time hints, query the weather APIs, and
+    return structured temperature/forecast fields.
+    WHY: Tier‑1 needs a deterministic weather tool so both CLI and router
+    results stay consistent even when probes/LLM disagree.
+    HOW: sanitize payload, call the `WeatherClient` helpers, and wrap the
+    response with extra metadata (domain/action) consumed by the orchestrator.
+    """
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
 
     city = _resolve_city(payload)

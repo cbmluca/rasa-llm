@@ -217,7 +217,14 @@ class CalendarStore:
 
 
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Entry point for calendar operations."""
+    """Calendar CRUD handler shared by the orchestrator and Tier‑5 UI.
+
+    WHAT: list, find, create, update, and delete calendar events.
+    WHY: ensures every conversational and reviewer action mutates the same
+    store logic (with dry-run staging for reviewer approvals).
+    HOW: normalize action aliases, validate/parse datetimes, and call the
+    ``CalendarStore`` helpers.
+    """
 
     action_raw = str(payload.get("action", "list")).strip().lower()
     action = _ACTION_ALIASES.get(action_raw, action_raw or "list")

@@ -20,6 +20,15 @@ _COMPLETION_LEADING_PATTERN = re.compile(r"^\s*(?:to\s+)+", re.IGNORECASE)
 
 
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
+    """Turn conversational todo phrases into structured ``CommandResult``.
+
+    WHAT: detect list/find/create/update/delete intents, infer titles/notes,
+    and capture deadlines/status clues.
+    WHY: keeps Tier‑1 deterministic so todo requests never require the router
+    when clearly phrased.
+    HOW: run a series of regex helpers (``_is_find_request`` etc.), extract
+    quoted titles/notes, and fall back to classifiers when no patterns fire.
+    """
     action = "create"
     completion_request = _is_completion_request(lowered)
     completion_title = _extract_completion_title(message)
@@ -100,6 +109,7 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
 
 
 def _strip_command_directives(message: str) -> str:
+    """Remove directive keywords ("notes", "deadline", etc.) before parsing titles."""
     lowered = message.lower()
     cut_index = len(message)
     for token in _TODO_DIRECTIVE_TOKENS:
@@ -110,20 +120,24 @@ def _strip_command_directives(message: str) -> str:
 
 
 def _is_list_request(lowered: str) -> bool:
+    """Return True when the utterance asks to list/show todos."""
     if _LIST_TODOS_PATTERN.search(lowered) or _SIMPLE_LIST_PATTERN.search(lowered):
         return True
     return any(phrase in lowered for phrase in ("show my todos", "show todos", "view my todos", "what are my todos"))
 
 
 def _is_find_request(lowered: str) -> bool:
+    """Return True when the user asks to find/search for todos."""
     return bool(_FIND_TODOS_PATTERN.search(lowered))
 
 
 def _is_delete_request(lowered: str) -> bool:
+    """Return True for delete/remove synonyms."""
     return any(keyword in lowered for keyword in ("delete todo", "remove todo", "delete task", "remove task"))
 
 
 def _is_completion_request(lowered: str) -> bool:
+    """Decide whether the user wants to mark a todo as completed."""
     if _COMPLETE_TODO_PATTERN.search(lowered):
         return True
     if _MARK_DONE_PATTERN.search(lowered):
@@ -132,6 +146,7 @@ def _is_completion_request(lowered: str) -> bool:
 
 
 def _extract_completion_title(message: str) -> Optional[str]:
+    """Pull the todo title from "complete X" phrasings."""
     patterns = [
         re.compile(r"(?:complete|finish)\s+(?:the\s+)?(?:task|todo)\s+(?:to\s+)?(.+)", re.IGNORECASE),
         re.compile(r"mark\s+(.+?)\s+as\s+(?:done|complete|finished)", re.IGNORECASE),
@@ -148,10 +163,12 @@ def _extract_completion_title(message: str) -> Optional[str]:
 
 
 def _strip_completion_leading(text: str) -> str:
+    """Normalize titles by removing leading "to ..." fragments."""
     return _COMPLETION_LEADING_PATTERN.sub("", (text or "")).strip()
 
 
 def _extract_find_keywords(message: str, *, nouns: Sequence[str] | None = None) -> str:
+    """Extract keyword phrases following verbs like find/search."""
     terms = nouns or ['todos?', 'tasks?']
     noun_pattern = "|".join(terms)
     pattern = re.compile(rf"\b(find|search|look\s*up|locate)\b\s*(?:for\s+)?(?:(?:the|my)\s+)?(?:(?:{noun_pattern})\s+)?(.+)", re.IGNORECASE)

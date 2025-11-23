@@ -14,6 +14,7 @@ def contains_keyword(text: str, keywords: set[str]) -> bool:
 
 
 def extract_after_keywords(message: str, keywords: List[str], terminators: Optional[List[str]] = None) -> Optional[str]:
+    """Return text that follows any of the supplied keywords until a terminator."""
     terminators = terminators or [" end", " ending", " til", " until", " notes", " location", " link"]
     for keyword in keywords:
         pattern = re.compile(rf"{keyword}\s+(.+)", re.IGNORECASE)
@@ -36,6 +37,7 @@ def extract_after_keywords(message: str, keywords: List[str], terminators: Optio
 
 
 def extract_json_array_after_keyword(message: str, keyword: str) -> Optional[List[str]]:
+    """Parse a JSON array following ``keyword`` (used for tags/notes inputs)."""
     pattern = re.compile(rf"{keyword}\s*(\[[^\]]+\])", re.IGNORECASE)
     match = pattern.search(message)
     if not match:

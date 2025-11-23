@@ -88,6 +88,7 @@ class Orchestrator:
 
     # --- Tool response normalization: keep user replies consistent across tools
     def _format_tool_response(self, tool_name: str, result: Dict[str, object]) -> str:
+        """Normalize raw tool payloads into readable strings for chat/CLI."""
         formatter = _FORMATTERS.get(tool_name)
         if not formatter:
             return str(result)
@@ -95,16 +96,18 @@ class Orchestrator:
 
     # --- Tool execution bridge: isolates registry lookup from call sites
     def _run_tool(self, tool_name: str, payload: Dict[str, object], *, dry_run: bool = False) -> tuple[Dict[str, object], str]:
+        """Invoke a registry tool and return both the structured and human output."""
         result = self._registry.run_tool(tool_name, payload, dry_run=dry_run)
         return result, self._format_tool_response(tool_name, result)
 
     def run_tool(self, tool_name: str, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
-        """Execute a tool synchronously and return the raw result."""
+        """Public helper for API callers that only need the structured tool result."""
 
         result, _ = self._run_tool(tool_name, payload, dry_run=dry_run)
         return result
 
     def _should_dry_run(self, tool_name: Optional[str], payload: Optional[Dict[str, object]]) -> bool:
+        """Decide if a tool execution should be staged (no persistent mutation)."""
         if not tool_name or not payload:
             return False
         action = str(payload.get("action") or "").strip().lower()
@@ -116,6 +119,7 @@ class Orchestrator:
         tool_name: str,
         result: Dict[str, object],
     ) -> Dict[str, Any]:
+        """Backfill domain/action breadcrumbs so logs can be filtered downstream."""
         metadata = dict(extras or {})
         domain = ""
         if isinstance(result, dict):
@@ -140,6 +144,15 @@ class Orchestrator:
         payload: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        """Run keyword probes to auto-convert fuzzy router decisions into CRUD calls.
+
+        WHAT: see if deterministic store probes can service the request before we
+        rely on an LLM answer.
+        WHY: captures asserted entities for training and avoids duplicate
+        implementations of list/find logic.
+        HOW: when matches exist we rewrite the payload into find/list and stash
+        probe metadata; otherwise we surface a friendly fallback message.
+        """
         candidates = {"kitchen_tips", "todo_list", "calendar_edit", "app_guide"}
         if tool_name not in candidates:
             return None
@@ -176,6 +189,7 @@ class Orchestrator:
         normalized_entities: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        """Let the LLM suggest a tool even when routing wouldn't normally call one."""
         hint_tool = self._router.suggest_tool(message)
         probed_tools = {"kitchen_tips", "todo_list", "calendar_edit", "app_guide"}
         if hint_tool not in probed_tools:
@@ -229,9 +243,20 @@ class Orchestrator:
             }
 
     def handle_message(self, message: str) -> str:
+        """Convenience wrapper for CLI clients that only need the reply text."""
         return self.handle_message_with_details(message).text
 
     def handle_message_with_details(self, message: str) -> OrchestratorResponse:
+        """End-to-end Tier‑1 turn execution.
+
+        WHAT: parse the message, decide whether to run a tool, router, or
+        fallback, and log every decision.
+        WHY: keeps a single audit-friendly funnel for CLI, web, and automated
+        tests so behaviour never diverges.
+        HOW: collect parser payloads, append to conversation memory, try
+        deterministic tools first, then escalate to the router and finally the
+        fallback, emitting structured metadata at the end.
+        """
         start = perf_counter()
 
         raw_message = message or ""
@@ -421,6 +446,7 @@ class Orchestrator:
         )
 
     def _intent_to_tool(self, intent: str) -> Optional[str]:
+        """Map legacy/alias intents to the tool name registered with Tier‑1."""
         mapping = {
             "ask_weather": "weather",
             "get_news": "news",
@@ -451,6 +477,7 @@ class Orchestrator:
         review_reason: Optional[str],
         parser_payload: Optional[Dict[str, Any]],
     ) -> None:
+        """Persist turn + review logs so Tier‑5 has traceability."""
         if not self._logger or not self._logger.enabled:
             return
 

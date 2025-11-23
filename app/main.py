@@ -29,6 +29,15 @@ from tools import load_all_core_tools
 
 # -- Orchestrator construction -------------------------------------------------
 def build_orchestrator() -> Orchestrator:
+    """Wire up Tier‑1 dependencies for CLI and the web API.
+
+    WHAT: instantiate deterministic NLU, tool registry, router, logger, and
+    short-term conversation memory.
+    WHY: every entry point (CLI/web) must share identical wiring so behavior
+    stays reproducible across environments.
+    HOW: pull runtime configuration from ``app.config`` helpers and hand the
+    resulting instances to ``core.orchestrator.Orchestrator``.
+    """
     classifier = IntentClassifier(get_classifier_model_path())
     nlu = NLUService(
         get_nlu_threshold(),
@@ -60,6 +69,15 @@ def build_orchestrator() -> Orchestrator:
 
 # -- Interactive CLI loop ------------------------------------------------------
 def main() -> None:
+    """Minimal CLI driver that proxies stdin to the orchestrator.
+
+    WHAT: read user prompts, forward them to ``handle_message``, and echo the
+    response.
+    WHY: offers a local debugging surface identical to Tier‑5 conversations so
+    we catch regressions before touching the UI.
+    HOW: reuse ``build_orchestrator`` (same stack the API uses) and exit on
+    EOF/KeyboardInterrupt or "quit" commands.
+    """
     orchestrator = build_orchestrator()
     print("Tier 1 assistant ready. Type 'quit' or 'exit' to stop.")
 

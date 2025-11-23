@@ -40,6 +40,7 @@ class NLUService:
         self._payload_builder = payload_builder or PayloadBuilder()
 
     def parse(self, message: str) -> NLUResult:
+        """Primary entry point: try deterministic parsing before ML fallback."""
         original = message or ""
         if not original.strip():
             return NLUResult(intent="nlu_fallback", confidence=0.0)
@@ -59,16 +60,19 @@ class NLUService:
         return NLUResult(intent="nlu_fallback", confidence=0.4)
 
     def is_confident(self, result: NLUResult) -> bool:
+        """Gate router escalation by comparing confidences to the right threshold."""
         if result.source == "classifier":
             return result.confidence >= self._classifier_threshold
         return result.confidence >= self._threshold
 
     def build_payload(self, result: NLUResult, message: str) -> Dict[str, Any]:
+        """Combine parser entities + raw text for tool execution."""
         payload: Dict[str, Any] = {"intent": result.intent, "message": message}
         payload.update(result.entities or {})
         return payload
 
     def build_metadata(self, result: NLUResult) -> Dict[str, Any]:
+        """Annotate turns with domains/sources so Tier‑5 can slice analytics."""
         tool_domains = {
             "weather": "weather",
             "news": "news",
@@ -93,6 +97,7 @@ class NLUService:
         return metadata
 
     def _classify(self, message: str) -> Optional[NLUResult]:
+        """Lazy-load classifier predictions when no rule fired."""
         if not self._classifier:
             return None
         prediction: Optional[ClassifierPrediction] = self._classifier.predict(message)

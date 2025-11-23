@@ -8,7 +8,14 @@ from knowledge.app_guide import AppGuideStore
 from core.tooling.query_helpers import best_effort_keywords, rank_entries, tokenize_keywords
 
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Handle knowledge base commands (list/find/create/update/delete)."""
+    """CRUD handler for the App Guide knowledge base.
+
+    WHAT: implement list/find/create/update/delete.
+    WHY: ensure both conversational probes and Tier‑5 reviewers mutate the same
+    canonical store logic.
+    HOW: resolve action aliases, normalize IDs/titles/keywords, and call the
+    ``AppGuideStore`` helpers with optional dry-run semantics.
+    """
 
     raw_action = str(payload.get("action", "list")).strip().lower() or "list"
     store = AppGuideStore()

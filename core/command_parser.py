@@ -9,6 +9,14 @@ from core.parsers.types import CommandResult
 
 
 def parse_command(message: str) -> Optional[CommandResult]:
+    """Try each domain parser until one claims the utterance.
+
+    WHAT: run intent-specific regex/token heuristics for weather/news/todo/etc.
+    WHY: deterministic parsing keeps Tier‑1 auditable and faster than the LLM
+    router when rules are clear.
+    HOW: fan-out across parser modules in priority order, passing both the
+    original text and a lowered cache to avoid repeated allocations.
+    """
     if not message:
         return None
     lowered = message.lower()

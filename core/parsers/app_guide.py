@@ -10,10 +10,12 @@ from core.parsers.types import CommandResult
 
 
 def matches(lowered: str) -> bool:
+    """Quick keyword check before running App Guide parsing heuristics."""
     return "app guide" in lowered or "knowledge" in lowered
 
 
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
+    """Infer App Guide CRUD actions from quoted ids/titles."""
     payload: Dict[str, object] = {"message": message, "domain": "knowledge"}
     quotes = extract_quoted_strings(message)
 
@@ -74,6 +76,7 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
 
 
 def _extract_section_identifier(message: str) -> Optional[str]:
+    """Fallback when no quoted section id is provided."""
     section = extract_after_keywords(message, ["for", "about", "section"])
     if section:
         tokens = section.split()

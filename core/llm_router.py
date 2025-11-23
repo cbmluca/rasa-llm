@@ -56,6 +56,7 @@ class LLMRouter:
         return {"type": "text", "content": content.strip()}
 
     def route(self, message: str) -> Union[str, Dict[str, object]]:
+        """Ask the LLM which tool (if any) should run for this message."""
         prompt = self._build_prompt(message)
         content, error = self._chat_completion(
             messages=[
@@ -107,6 +108,7 @@ class LLMRouter:
         return None
 
     def general_answer(self, message: str) -> str:
+        """Fallback helper used when deterministic stacks provide no answer."""
         content, error = self._chat_completion(
             messages=[
                 {"role": "system", "content": "You are ChatGPT helping a user after routing failed."},

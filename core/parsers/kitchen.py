@@ -11,10 +11,12 @@ from core.parsers.types import CommandResult
 
 
 def matches(lowered: str) -> bool:
+    """Quick guard to avoid expensive parsing when no kitchen keywords exist."""
     return "kitchen" in lowered and "tip" in lowered
 
 
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
+    """Detect kitchen tip CRUD intents and seed payloads for the tool layer."""
     payload: Dict[str, object] = {"message": message, "domain": "kitchen"}
 
     if re.search(r"add\s+(?:a\s+)?kitchen tip", lowered) or "create kitchen tip" in lowered or "via the form" in lowered:

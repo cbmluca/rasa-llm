@@ -32,6 +32,7 @@ def find_date_in_text(message: str) -> Optional[str]:
 
 
 def parse_datetime_hint_local(text: str) -> Optional[str]:
+    """Convert casual datetime phrases into ISO timestamps for local use."""
     dt_value = parse_datetime_hint(text, default_time=None)
     return dt_value.isoformat() if dt_value else None
 

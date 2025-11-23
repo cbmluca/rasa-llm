@@ -17,6 +17,7 @@ class PayloadBuilder:
     """
 
     def build(self, intent: str, message: str) -> Dict[str, Any]:
+        """Route classifier intents to the associated lightweight heuristic."""
         handler = getattr(self, f"_build_{intent}", None)
         if not handler:
             return {}
@@ -27,6 +28,7 @@ class PayloadBuilder:
 
     # --- intent-specific helpers -------------------------------------------------
     def _build_todo_list(self, message: str) -> Dict[str, Any]:
+        """Guess todo action/title/notes when no deterministic parser fired."""
         action = self._infer_action(
             message,
             mapping={
@@ -50,6 +52,7 @@ class PayloadBuilder:
         return payload
 
     def _build_kitchen_tips(self, message: str) -> Dict[str, Any]:
+        """Map verbs to kitchen tip actions (list/find/create)."""
         action = self._infer_action(
             message,
             mapping={
@@ -63,6 +66,7 @@ class PayloadBuilder:
         return {"action": action}
 
     def _build_calendar_edit(self, message: str) -> Dict[str, Any]:
+        """Prefer create/update/list hints for calendar prompts."""
         action = self._infer_action(
             message,
             mapping={
@@ -80,6 +84,7 @@ class PayloadBuilder:
         return payload
 
     def _build_app_guide(self, message: str) -> Dict[str, Any]:
+        """Decide between list/delete/upsert/get for knowledge base requests."""
         action = self._infer_action(
             message,
             mapping={
@@ -93,6 +98,7 @@ class PayloadBuilder:
         return {"action": action}
 
     def _build_news(self, message: str) -> Dict[str, Any]:
+        """Extract the topic the user wants headlines about."""
         topic = self._extract_topic(message)
         payload: Dict[str, Any] = {}
         if topic:
@@ -100,11 +106,13 @@ class PayloadBuilder:
         return payload
 
     def _build_weather(self, message: str) -> Dict[str, Any]:
+        """Distinguish current weather queries from forecast requests."""
         action = "forecast" if "forecast" in message.lower() or "later" in message.lower() else "current"
         return {"mode": action}
 
     # --- utilities ----------------------------------------------------------------
     def _infer_action(self, message: str, mapping: Dict[str, List[str]], default: str) -> str:
+        """Shared keyword matcher that backs each intent-specific builder."""
         lowered = (message or "").lower()
         for action, keywords in mapping.items():
             for keyword in keywords:
@@ -113,6 +121,7 @@ class PayloadBuilder:
         return default
 
     def _extract_topic(self, message: str) -> Optional[str]:
+        """Pull news topic from common phrasings ("news about", etc.)."""
         lowered = message.lower()
         for prefix in ("news about", "news on", "news regarding", "about", "on", "regarding"):
             idx = lowered.find(prefix)

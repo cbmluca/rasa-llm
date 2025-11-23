@@ -198,7 +198,14 @@ class KitchenTipsStore:
 
 
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Handle kitchen tip lookup commands."""
+    """Kitchen tips CRUD surface shared by the orchestrator and router.
+
+    WHAT: list/find/create/update/delete structured tips.
+    WHY: consolidates business rules (title matching, keyword search) so the
+    UI and probes never drift apart.
+    HOW: normalize the action, hydrate IDs/titles, and call ``KitchenTipsStore``
+    with optional dry-run semantics for staged corrections.
+    """
 
     action = str(payload.get("action", "list")).strip().lower() or "list"
     if action in {"search", "get"}:

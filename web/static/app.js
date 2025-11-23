@@ -1,3 +1,7 @@
+// Tier-5 dashboard constants and helpers
+// WHAT: Define poll intervals, intent wiring, field layouts, and reusable DOM refs.
+// WHY: Keeps the UI declarative so features (e.g., new tools) are driven by config instead of ad-hoc logic.
+// HOW: Use consistent naming across pending queue, training view, and data tabs.
 const POLL_INTERVAL_MS = 15000;
 const DEFAULT_INTENT_ACTIONS = {
   todo_list: ['list', 'find', 'create', 'update', 'delete'],
@@ -395,6 +399,9 @@ if (typeof window !== 'undefined' && window.history && 'scrollRestoration' in wi
   window.history.scrollRestoration = 'manual';
 }
 
+// WHAT: standardize AJAX calls with JSON parsing and friendly errors.
+// WHY: every frontend API call should share headers/logic so errors propagate consistently.
+// HOW: invoked by every `/api/...` call so it wraps `fetch`, parses success (incl. 204), and bubbles server detail strings when orchestration endpoints fail.
 async function fetchJSON(url, options = {}) {
   const response = await fetch(url, {
     headers: {
@@ -424,6 +431,9 @@ async function fetchJSON(url, options = {}) {
   throw new Error(detail || 'Request failed');
 }
 
+// WHAT: display a temporary toast notification.
+// WHY: reviewers need quick confirmation/error messages when mutating state.
+// HOW: writes the message/type into `#toast`, shows it, then hides it after 3 s so reviewers see feedback without extra clicks.
 function showToast(message, type = 'info') {
   if (!el.toast) return;
   el.toast.textContent = message;
@@ -434,12 +444,18 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
+// WHAT: update the chat footer with the latest status message.
+// WHY: gives operators feedback when the chatbot is running or idle.
+// HOW: whenever chat submission or polling starts/ends we update `#chat-status` so the footer mirrors backend activity.
 function setChatStatus(text) {
   if (el.chatStatus) {
     el.chatStatus.textContent = text;
   }
 }
 
+// WHAT: swap between the dashboard’s top-level views (Chat, Training, Data Stores).
+// WHY: Tier‑5 is a single-page app; toggling visibility keeps state intact.
+// HOW: flips `.active` on both nav buttons and `.page-view` panels and stores the selection so refreshes land the reviewer back on the same section.
 function switchPage(targetId) {
   const pageViews = document.querySelectorAll('.page-view');
   if (!targetId) return;
@@ -456,6 +472,9 @@ function switchPage(targetId) {
   }
 }
 
+// WHAT: list valid actions for the selected intent.
+// WHY: the action dropdown should reflect both defaults and runtime-configured additions.
+// HOW: combines baked-in defaults with `/api/intents` overrides so the action dropdown always mirrors what the orchestrator will accept.
 function getActionsForIntent(intent) {
   if (!intent) return [];
   const defaults = DEFAULT_INTENT_ACTIONS[intent] || [];
@@ -472,6 +491,9 @@ function getActionsForIntent(intent) {
   return result;
 }
 
+// WHAT: collapse tool-specific action aliases (e.g., “search” -> “find”).
+// WHY: keeps payloads consistent regardless of how the router/parser named the action.
+// HOW: consults `ACTION_ALIASES` before we dispatch/prefill forms so payloads sent to `/api/logs/label` align with tool expectations.
 function normalizeActionName(intent, action) {
   if (!action) return action;
   const aliases = ACTION_ALIASES[intent];
@@ -479,6 +501,9 @@ function normalizeActionName(intent, action) {
   return aliases[action] || action;
 }
 
+// WHAT: clean the `/api/intents` response before storing it.
+// WHY: protects the UI from duplicates or unsupported actions when configs drift.
+// HOW: when `/api/intents` responds we strip duplicates/unsupported verbs so downstream dropdowns never expose stale options.
 function sanitizeIntentActions(raw = {}) {
   const sanitized = {};
   Object.entries(raw).forEach(([intent, actions]) => {
@@ -499,6 +524,9 @@ function sanitizeIntentActions(raw = {}) {
   return sanitized;
 }
 
+// WHAT: rebuild the intent dropdown using the current set of registered tools.
+// WHY: whenever `/api/intents` responds or state resets, reviewers need an accurate list.
+// HOW: replaces the `<select>` contents with sorted labels so when reviewers pick a tool it matches what Tier‑1 registered.
 function populateIntentOptions() {
   if (!el.intentSelect) return;
   el.intentSelect.innerHTML = '';
@@ -517,6 +545,9 @@ function populateIntentOptions() {
   el.intentSelect.selectedIndex = -1;
 }
 
+// WHAT: populate the action select based on the chosen intent.
+// WHY: action options differ per tool; showing irrelevant ones causes bad payloads.
+// HOW: pulls the merged action list, orders it per tool defaults, and sets the dropdown so corrections mirror the orchestrator dispatch path.
 function updateActionSelectOptions(intent, defaultValue) {
   if (!el.actionSelect) return;
   const actions = getActionsForIntent(intent);
@@ -556,6 +587,9 @@ function updateActionSelectOptions(intent, defaultValue) {
   el.actionSelect.value = nextValue;
 }
 
+// WHAT: render the chat transcript in the left-hand panel.
+// WHY: reviewers monitor real-time interactions and need links to pending items.
+// HOW: iterates `state.chat`, renders bubbles plus tool metadata, and keeps the log scrolled so reviewers can jump from the transcript to pending cards.
 function renderChat() {
   if (!el.chatLog) return;
   el.chatLog.innerHTML = '';
@@ -589,6 +623,9 @@ function renderChat() {
   el.chatLog.scrollTop = el.chatLog.scrollHeight;
 }
 
+// WHAT: stringify parser payload values for short previews.
+// WHY: pending cards show only the first few key/value pairs as inline text.
+// HOW: before pending cards render inline payload summaries we stringify arrays/objects, trim strings, and fallback to “—” for empty values.
 function formatPreviewValue(value) {
   if (Array.isArray(value)) {
     return value.join(', ');
@@ -599,6 +636,9 @@ function formatPreviewValue(value) {
   return String(value ?? '');
 }
 
+// WHAT: convert ISO timestamps into localized display text.
+// WHY: pending/meta sections show human-readable timestamps (Created at ...).
+// HOW: convert parser timestamps into `Date` objects, guard invalid values, and format via `toLocaleString` before printing in metadata rows.
 function formatTimestamp(ts) {
   if (!ts) return null;
   const date = new Date(ts);
@@ -614,6 +654,9 @@ function formatTimestamp(ts) {
   });
 }
 
+// WHAT: create the combined metadata string shown beneath each pending card.
+// WHY: reviewers need to see confidence, source, probe info, etc., at a glance.
+// HOW: assembles the pill text by appending timestamp, classifier confidence, invocation source, and keyword-probe notes so reviewers see the full routing story inline.
 function buildPendingMetadata(item) {
   const parts = [];
   const created = formatTimestamp(item.timestamp);
@@ -638,6 +681,9 @@ function buildPendingMetadata(item) {
   return parts.join(' • ');
 }
 
+// WHAT: sort pending queue items by timestamp descending while deduping.
+// WHY: the UI should show the newest unresolved prompts first without duplicates.
+// HOW: clone the server response, sort newest-first, and skip duplicate hashes so the queue list and poller stay in sync without flicker.
 function sortPendingByRecency(items) {
   const sorted = (items || []).slice().sort((a, b) => {
     const timeA = new Date(a?.timestamp || 0).getTime();
@@ -661,6 +707,9 @@ function sortPendingByRecency(items) {
   });
 }
 
+// WHAT: normalize a record’s `related_prompts` array into trimmed unique strings.
+// WHY: backend data may contain duplicates or include the primary prompt; the UI needs clean chips.
+// HOW: before chips render we coerce API arrays, drop blanks/primary text, and cap to the most recent 10 so corrected payloads stay lean.
 function normalizeRelatedPromptsList(record) {
   if (!record) return [];
   const prompts = Array.isArray(record.related_prompts) ? record.related_prompts : [];
@@ -672,6 +721,9 @@ function normalizeRelatedPromptsList(record) {
   return filtered.slice(-10);
 }
 
+// WHAT: shallow equality check for related prompt arrays.
+// WHY: we only want to preserve reviewer edits if the list actually changed.
+// HOW: compare lengths and string order so we know whether to preserve reviewer edits when merging fresh pending data.
 function arePromptListsEqual(listA = [], listB = []) {
   if (!Array.isArray(listA) || !Array.isArray(listB)) return false;
   if (listA.length !== listB.length) return false;
@@ -683,6 +735,9 @@ function arePromptListsEqual(listA = [], listB = []) {
   return true;
 }
 
+// WHAT: normalize the `intended_entities` array from API records.
+// WHY: chips require `{id,title}` objects even when the backend stored different keys.
+// HOW: convert whatever backend schema we got into `{id,title}` pairs so chips dropdowns can reuse a consistent shape.
 function normalizeIntendedEntities(record) {
   if (!record) return [];
   const entities = Array.isArray(record.intended_entities) ? record.intended_entities : [];
@@ -697,6 +752,9 @@ function normalizeIntendedEntities(record) {
     .filter(Boolean);
 }
 
+// WHAT: shallow equality check for intended entity arrays.
+// WHY: ensures we don’t overwrite reviewer-edited lists when refreshing.
+// HOW: compare lengths plus each `{id,title}` so we don’t overwrite reviewer-added chips when fresh queue snapshots arrive.
 function areIntendedListsEqual(listA = [], listB = []) {
   if (!Array.isArray(listA) || !Array.isArray(listB)) return false;
   if (listA.length !== listB.length) return false;
@@ -710,6 +768,9 @@ function areIntendedListsEqual(listA = [], listB = []) {
   return true;
 }
 
+// WHAT: coerce pending API records into the shape the UI expects.
+// WHY: earlier entries may miss fields (prompt_id, predicted payload, metadata).
+// HOW: clone the API row, ensure it has a predicted payload object, and attach normalized prompts/entities so the editor always receives consistent shapes.
 function normalizePendingRecord(record) {
   if (!record || typeof record !== 'object') {
     return record;
@@ -730,6 +791,9 @@ function normalizePendingRecord(record) {
   };
 }
 
+// WHAT: mark a field as edited by the reviewer.
+// WHY: helps flag which values differ from parser predictions and drives UI hints.
+// HOW: mark the field in local state and on the selected prompt so downstream renders (chips, payload diffs) can highlight reviewer overrides.
 function flagReviewerChange(field) {
   if (!field) return;
   state.fieldVersions[field] = 'reviewer';
@@ -739,6 +803,9 @@ function flagReviewerChange(field) {
   }
 }
 
+// WHAT: fetch the most recent distinct user prompts (excluding the active one).
+// WHY: powers the Related Prompts dropdown so reviewers can quickly link context.
+// HOW: walk the chat array backwards, collect user messages, dedupe, and cap the list so the Related Prompts dropdown can surface the most recent alternate prompts.
 function getRecentUserPrompts(limit = 10) {
   const primary = (state.selectedPrompt?.user_text || '').trim();
   const recent = [];
@@ -758,6 +825,9 @@ function getRecentUserPrompts(limit = 10) {
   return recent;
 }
 
+// WHAT: normalize orchestrator conversation history extras into `{id,text}` pairs.
+// WHY: the Related Prompts picker should reuse previously asserted prompts.
+// HOW: inspect the orchestrator’s stored conversation history (or fallback to existing related prompts) and sanitize them before they feed suggestion builders.
 function getConversationHistoryEntries(record) {
   if (!record) return [];
   const extrasHistory = record.extras?.conversation_history;
@@ -777,6 +847,9 @@ function getConversationHistoryEntries(record) {
     .filter((entry) => entry.text);
 }
 
+// WHAT: pick the ±N prompts around the selected entry from conversation history.
+// WHY: suggestions should focus on conversational neighbors, not arbitrary history.
+// HOW: find the matching entry (by id or text) in conversation history and slice prompts before/after it so follow-up suggestions stay localized to the same dialog.
 function getNearbyHistoryPrompts(record, beforeCount = 5, afterCount = 5) {
   const entries = getConversationHistoryEntries(record);
   if (!entries.length) return [];
@@ -809,12 +882,18 @@ function getNearbyHistoryPrompts(record, beforeCount = 5, afterCount = 5) {
   return suggestions;
 }
 
+// WHAT: build a cached array of `{index,text,entryId}` for user chat messages.
+// WHY: multiple helpers need indexed access to the chat log without recalculating.
+// HOW: create a cached array of `{index,text}` for user entries so history fallbacks can reuse the same structure without re-walking the chat log.
 function getChatUserEntries() {
   return state.chat
     .map((entry, index) => ({ ...entry, index }))
     .filter((entry) => entry.role === 'user' && (entry.text || '').trim());
 }
 
+// WHAT: fallback to chat history neighbors when conversation memory lacks data.
+// WHY: ensures Related Prompts still works for older cards created before memory snapshots.
+// HOW: locate the matching user entry (by conversation id or text) inside `state.chat`, pull the surrounding prompts, and hand them to the suggestion builder when conversation history is missing.
 function getNearbyChatPrompts(record, beforeCount = 5, afterCount = 5) {
   if (!record) return [];
   const entries = getChatUserEntries();
@@ -848,6 +927,9 @@ function getNearbyChatPrompts(record, beforeCount = 5, afterCount = 5) {
   return suggestions;
 }
 
+// WHAT: combine history/chat/pending neighbors into a deduped suggestion list.
+// WHY: reviewers should see relevant prompts even if some metadata sources are missing.
+// HOW: merges prompts from conversation history, chat log, and queue neighbors, falling back to latest user prompts so the dropdown always has context-rich suggestions.
 function buildRelatedPromptSuggestions(beforeCount = 5, afterCount = 5) {
   if (!state.selectedPrompt) return [];
   let combined = [
@@ -876,6 +958,9 @@ function buildRelatedPromptSuggestions(beforeCount = 5, afterCount = 5) {
   return suggestions;
 }
 
+// WHAT: pull keyword probe matches (if any) from the record extras.
+// WHY: used to auto-fill intended entities and ID/title fields when the router made a confident match.
+// HOW: pulls the orchestrator’s keyword probe metadata, normalizes each hit into `{id,title}`, and hands them off to ID/title/intended-entity autofill logic.
 function getProbeMatches(record) {
   if (!record || !record.extras) return [];
   const probe = record.extras.keyword_probe;
@@ -898,6 +983,9 @@ function getProbeMatches(record) {
     .filter((entry) => entry && entry.title);
 }
 
+// WHAT: hydrate intended entities/IDs/titles from probe matches when available.
+// WHY: saves reviewers time when the router already pinpointed the right entity.
+// HOW: set `state.intendedEntities` if empty and fill ID/title fields for update/delete actions.
 function mergeProbeMatchesIntoState(record, intent, action) {
   const matches = getProbeMatches(record);
   if (!matches.length) {
@@ -923,6 +1011,9 @@ function mergeProbeMatchesIntoState(record, intent, action) {
   }
 }
 
+// WHAT: final fallback to ±N pending entries when no conversation/chat history exists.
+// WHY: cards imported from CSV or older log files still need sensible suggestions.
+// HOW: find the card’s index inside `state.pending` and gather nearby prompt texts so even CSV-imported queues can feed the Related Prompts picker.
 function getPendingNeighborPrompts(record, beforeCount = 5, afterCount = 5) {
   if (!record || !Array.isArray(state.pending) || !state.pending.length) return [];
   const index = state.pending.findIndex((item) => item.prompt_id === record.prompt_id);
@@ -949,6 +1040,9 @@ function getPendingNeighborPrompts(record, beforeCount = 5, afterCount = 5) {
   return suggestions;
 }
 
+// WHAT: append a related prompt chip.
+// WHY: reviewers link follow-up turns so the training pipeline understands multi-message context.
+// HOW: trim/dedupe the chosen string, append it to the selected prompt’s `related_prompts`, and re-render chips so the correction payload mirrors reviewer intent.
 function addRelatedPrompt(promptText) {
   if (!state.selectedPrompt) return;
   const text = (promptText || '').trim();
@@ -960,6 +1054,9 @@ function addRelatedPrompt(promptText) {
   renderRelatedPrompts();
 }
 
+// WHAT: remove a related prompt chip.
+// WHY: curating the list keeps incorrect suggestions out of the labeled payload.
+// HOW: drop the chip at the given index and refresh the list so only the desired prompts reach `/api/logs/label`.
 function removeRelatedPrompt(index) {
   if (!state.selectedPrompt) return;
   const prompts = state.selectedPrompt.related_prompts || [];
@@ -969,6 +1066,9 @@ function removeRelatedPrompt(index) {
   renderRelatedPrompts();
 }
 
+// WHAT: eagerly remove pending entries (primary + related) after a correction.
+// WHY: keeps the queue visually in sync without waiting for the poll interval.
+// HOW: after `/api/logs/label` succeeds we filter out both the primary card and any related prompts so the queue UI reflects the backend immediately without waiting for the poller.
 function removePendingEntriesFromState(primaryId, relatedPrompts = []) {
   const normalizedPrompts = new Set(
     (relatedPrompts || [])
@@ -995,6 +1095,9 @@ function removePendingEntriesFromState(primaryId, relatedPrompts = []) {
   }
 }
 
+// WHAT: add an Intended Entity chip.
+// WHY: captures which entities the system asserted or the reviewer expects for list/find flows.
+// HOW: dedupe the `{id,title}` pair, push it into both state and the selected prompt, then re-render chips so logging payloads inherit the reviewer’s target entities.
 function addIntendedEntity(entity) {
   if (!entity || !entity.title) return;
   state.intendedEntities = state.intendedEntities || [];
@@ -1008,6 +1111,9 @@ function addIntendedEntity(entity) {
   renderIntendedEntities();
 }
 
+// WHAT: remove an Intended Entity chip.
+// WHY: reviewers may need to drop incorrect auto-filled matches before logging.
+// HOW: remove the entry at the given index, update the prompt’s list, and redraw chips so unintended matches don’t end up in corrected payloads.
 function removeIntendedEntity(index) {
   if (!state.intendedEntities) return;
   if (index < 0 || index >= state.intendedEntities.length) return;
@@ -1020,6 +1126,9 @@ function removeIntendedEntity(index) {
 
 const PRONOUN_TOKENS = new Set(['this', 'that', 'it', 'this one', 'that one', 'this todo', 'that todo']);
 
+// WHAT: convert pronoun references (“this/that”) into concrete prompt values.
+// WHY: follow-up utterances often refer to prior entities implicitly; we still need the actual text for lookup.
+// HOW: scan the normalized related prompts list from newest to oldest and pick the first non-primary text so subsequent hydration logic can map “this/that” to a real entity.
 function resolvePronounValue(value, record) {
   if (typeof value !== 'string') return value;
   const trimmed = value.trim();
@@ -1039,6 +1148,9 @@ function resolvePronounValue(value, record) {
   return value;
 }
 
+// WHAT: replace pronoun-based title/id fields with resolved values.
+// WHY: ensures lookup fields point to explicit entities when the parser only captured “this”/“that”.
+// HOW: resolve the title text, then if it matches a single entity we stash its ID/lookup title so the rest of the correction form already points at the correct record before the reviewer edits anything.
 function applyPronounResolution(fields, record) {
   if (!fields || !record) return fields;
   const intent = record.intent || state.selectedPrompt?.intent || '';
@@ -1066,15 +1178,24 @@ function applyPronounResolution(fields, record) {
   return reconciled;
 }
 
+// WHAT: count how many prior corrections exist for a given prompt id.
+// WHY: drives the version history summary shown in the editor sidebar.
+// HOW: count matching records in `state.corrected` so the sidebar can show how many corrections exist before the reviewer opens history.
 function getVersionCount(promptId) {
   if (!promptId) return 0;
   return state.corrected.filter((record) => record.id === promptId).length;
 }
 
+// WHAT: convert raw intent names into human-friendly labels.
+// WHY: pending cards should show readable tool names (e.g., “Todo tool”).
+// HOW: lookup the friendly label (e.g., “Todo tool”) from `INTENT_LABELS` so pills/headings display a reviewer-friendly name even if the raw intent is technical.
 function formatIntentLabel(intent) {
   return INTENT_LABELS[intent] || intent || 'nlu_fallback';
 }
 
+// WHAT: reorder payload keys for display purposes.
+// WHY: ensures intent/action/domain appear first when rendering payload JSON.
+// HOW: build a shallow copy, emit the meta fields first, then append remaining keys alphabetically so JSON previews in Pending/Training remain readable.
 function orderPayloadForDisplay(payload) {
   if (!payload || typeof payload !== 'object') {
     return payload || {};
@@ -1097,6 +1218,9 @@ function orderPayloadForDisplay(payload) {
   return ordered;
 }
 
+// WHAT: build dropdown options from the cached store data for a tool.
+// WHY: update/delete actions use entity selectors; these need consistent labels/ids.
+// HOW: read the cached store via `ENTITY_FIELD_CONFIG`, convert entries into option objects, and sort them so the ID dropdowns stay consistent with the underlying JSON stores.
 function getEntityOptions(tool) {
   const config = ENTITY_FIELD_CONFIG[tool];
   if (!config) return [];
@@ -1111,6 +1235,9 @@ function getEntityOptions(tool) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
+// WHAT: read cached chat history from localStorage.
+// WHY: preserves the mini transcript across reloads when reviewers refresh the page.
+// HOW: read the persisted JSON array, keep only the latest 10, and stuff it back into `state.chat` so renderChat can pick up where the reviewer left off.
 function loadStoredChatHistory() {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CHAT_HISTORY);
@@ -1124,6 +1251,9 @@ function loadStoredChatHistory() {
   }
 }
 
+// WHAT: write the most recent chat entries to localStorage.
+// WHY: lets the chat log survive page reloads between sessions.
+// HOW: whenever the chat log updates we trim it to 10 entries and write it to localStorage, keeping reloads cheap.
 function persistChatHistory() {
   try {
     const trimmed = state.chat.slice(-10);
@@ -1134,6 +1264,9 @@ function persistChatHistory() {
   }
 }
 
+// WHAT: load the “Latest Confirmed” record from storage.
+// WHY: keeps the confirmation panel populated even after reloads.
+// HOW: read the serialized record from localStorage and assign it to `state.latestConfirmed` so the sidebar populates immediately on refresh.
 function loadStoredLatestConfirmed() {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.LATEST_CONFIRMED);
@@ -1147,6 +1280,9 @@ function loadStoredLatestConfirmed() {
   }
 }
 
+// WHAT: persist the most recent correction record so the summary panel survives reloads.
+// WHY: reviewers expect to see the last triggered payload even if they refresh.
+// HOW: after every correction we either store the new record or clear the key so the sidebar reflects the latest trigger status.
 function persistLatestConfirmed() {
   try {
     if (state.latestConfirmed) {
@@ -1159,6 +1295,9 @@ function persistLatestConfirmed() {
   }
 }
 
+// WHAT: restore the last selected pending prompt id from storage.
+// WHY: allows reviewers to pick up where they left off after a refresh.
+// HOW: grab the saved prompt id from storage (if any) so `selectPendingPrompt` can rehydrate the editor on reload.
 function loadStoredSelection() {
   try {
     const storedPrompt = localStorage.getItem(STORAGE_KEYS.SELECTED_PROMPT);
@@ -1170,6 +1309,9 @@ function loadStoredSelection() {
   }
 }
 
+// WHAT: group store entries by title for dropdown consumption.
+// WHY: titles may have duplicate IDs; grouping helps us present unique dropdown entries.
+// HOW: reuse `getEntityOptions` output to group options by lowercase title so update/delete flows can show a single dropdown entry even when multiple IDs share the name.
 function getTitleGroups(tool) {
   const options = getEntityOptions(tool);
   const groups = new Map();
@@ -1187,6 +1329,9 @@ function getTitleGroups(tool) {
   return groups;
 }
 
+// WHAT: produce sorted title dropdown options from grouped entities.
+// WHY: update/delete workflows show human-readable titles instead of IDs.
+// HOW: flatten the grouped titles into `{value,label}` entries and sort them, giving the title dropdown a stable alphabetical order.
 function getTitleOptions(tool) {
   const groups = getTitleGroups(tool);
   return Array.from(groups.values())
@@ -1194,6 +1339,9 @@ function getTitleOptions(tool) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
+// WHAT: return entity options that match a specific title (case-insensitive).
+// WHY: used to auto-select IDs when a reviewer picks an existing title.
+// HOW: look up the normalized title inside the grouped map and return every entity option that shares it so subsequent ID auto-fill logic can evaluate the match count.
 function getEntitiesMatchingTitle(tool, title) {
   if (!title) return [];
   const groups = getTitleGroups(tool);
@@ -1201,6 +1349,9 @@ function getEntitiesMatchingTitle(tool, title) {
   return entry ? entry.options : [];
 }
 
+// WHAT: auto-fill the ID field when only one entity matches the provided title.
+// WHY: saves reviewers from manually selecting IDs during update/delete flows.
+// HOW: ask `getEntitiesMatchingTitle` for matches and, when exactly one exists, stash its id in the correction fields so submissions already reference the concrete entity.
 function autoSelectIdForTitle(tool, title) {
   const matches = getEntitiesMatchingTitle(tool, title);
   if (matches.length === 1) {
@@ -1211,6 +1362,9 @@ function autoSelectIdForTitle(tool, title) {
   return matches.length;
 }
 
+// WHAT: merge hydrated entity data into the current correction fields.
+// WHY: selecting an ID from the dropdown should populate related fields (notes, deadlines, etc.).
+// HOW: loop over the tool-specific hydrate payload and copy values (or remove empties) into `state.correctionFields` so the editor reflects the selected entity’s data.
 function applyHydratedFields(fields) {
   Object.entries(fields || {}).forEach(([key, value]) => {
     if (value === undefined) {
@@ -1227,6 +1381,9 @@ function applyHydratedFields(fields) {
   });
 }
 
+// WHAT: determine whether a field currently has a meaningful value.
+// WHY: used when checking required fields and to toggle “field required” styling.
+// HOW: treat trimmed strings, non-empty objects, and truthy primitives as filled so required-field highlighting and submission checks stay consistent.
 function fieldHasValue(value) {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') {
@@ -1238,6 +1395,9 @@ function fieldHasValue(value) {
   return true;
 }
 
+// WHAT: assign CSS grid positions to dynamic form fields based on intent/action layouts.
+// WHY: keeps the editor grid organized differently per tool (e.g., calendar vs todo).
+// HOW: fetch the tool/action-specific coordinates and set each wrapper’s CSS grid placement so the correction form stays organized regardless of which fields render.
 function applyFieldLayout(wrapper, intent, action, key) {
   if (!wrapper) {
     return;
@@ -1265,6 +1425,9 @@ function applyFieldLayout(wrapper, intent, action, key) {
   }
 }
 
+// WHAT: lazily initialize the shared date/time state object for a field.
+// WHY: split inputs (date + time) need to persist their values between renders.
+// HOW: ensure the `state.datetimeInputs` cache has an entry for the field so multiple renders/edit handlers share the same draft date/time values.
 function ensureDateTimeState(field) {
   if (!state.datetimeInputs[field]) {
     state.datetimeInputs[field] = { dateValue: '', timeValue: '' };
@@ -1272,11 +1435,17 @@ function ensureDateTimeState(field) {
   return state.datetimeInputs[field];
 }
 
+// WHAT: update either the date or time portion of a datetime field.
+// WHY: input handlers reuse this to keep state in sync with user edits.
+// HOW: ensure the per-field state exists and update either `.dateValue` or `.timeValue`, keeping text inputs and eventual payload serialization in sync.
 function setDateTimePart(field, part, value) {
   const target = ensureDateTimeState(field);
   target[part] = value;
 }
 
+// WHAT: translate the internal date/time state into the payload format.
+// WHY: weather/calendar/todo fields expect normalized ISO or structured objects.
+// HOW: parse the stored strings (anchored to the prompt timestamp for relatives) and update `state.correctionFields` so submissions include normalized ISO/time payloads.
 function applyDateTimeFieldValue(field, config) {
   const baseDate = getBaseDate();
   const stateValue = ensureDateTimeState(field);
@@ -1317,6 +1486,9 @@ function applyDateTimeFieldValue(field, config) {
   state.correctionFields[field] = `${dateInfo.iso}T${timeValue}`;
 }
 
+// WHAT: determine the reference date for relative parsing (prompt timestamp or now).
+// WHY: relative keywords like “tomorrow” should anchor to the original prompt time.
+// HOW: parse `state.selectedPrompt.timestamp` (fallback to now) so both the datalist hints and parser normalization use the same anchor.
 function getBaseDate() {
   const ts = state.selectedPrompt?.timestamp;
   if (!ts) return new Date();
@@ -1324,20 +1496,32 @@ function getBaseDate() {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+// WHAT: format Date objects as ISO `YYYY-MM-DD` strings.
+// WHY: used by the relative date datalist hints.
+// HOW: slice the first 10 characters from `date.toISOString()`.
 function formatISODate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+// WHAT: format Date objects as localized `DD/MM` strings.
+// WHY: improves readability of the relative date datalist options.
+// HOW: call `toLocaleDateString` with day/month options.
 function formatDisplayDate(date) {
   return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' });
 }
 
+// WHAT: create a new Date offset by `amount` days.
+// WHY: reused when building relative date options.
+// HOW: clone the Date, adjust the day, and return the new instance.
 function addDays(date, amount) {
   const clone = new Date(date.getTime());
   clone.setDate(clone.getDate() + amount);
   return clone;
 }
 
+// WHAT: enumerate relative date suggestions (“today”, weekdays, etc.).
+// WHY: date inputs share the same datalist for fast reviewer entry.
+// HOW: offset from the base date to produce ISO strings plus human labels so date fields and datalists stay aligned.
 function buildRelativeDateOptions(baseDate) {
   const options = [];
   const labels = [
@@ -1367,6 +1551,9 @@ function buildRelativeDateOptions(baseDate) {
   return options;
 }
 
+// WHAT: enumerate relative time suggestions (“morning”, “evening”, etc.).
+// WHY: list/find workflows often rely on rough parts of day rather than exact times.
+// HOW: supply canonical HH:MM values for each friendly label so both the datalist and payload serializer speak the same shorthand.
 function buildRelativeTimeOptions(baseDate) {
   const baseTime = baseDate.toTimeString().slice(0, 5);
   return [
@@ -1379,6 +1566,9 @@ function buildRelativeTimeOptions(baseDate) {
   ];
 }
 
+// WHAT: normalize free-form date text into ISO/keyword/display triples.
+// WHY: reviewers can type “tomorrow”, “12/05”, etc., and we still need canonical payloads.
+// HOW: check for known relative labels/ISO patterns first, otherwise fallback to raw text, so downstream serialization can decide whether to store ISO dates or conversational keywords.
 function parseDateInput(value, baseDate) {
   if (!value) return { iso: '', keyword: '', display: '' };
   const trimmed = value.trim();
@@ -1402,6 +1592,9 @@ function parseDateInput(value, baseDate) {
   return { iso: '', keyword: trimmed.toLowerCase(), display: trimmed, label: trimmed };
 }
 
+// WHAT: normalize free-form time text into HH:MM plus optional keyword.
+// WHY: time fields accept natural phrases (“morning”, “now”) that must serialize cleanly.
+// HOW: favor explicit HH:MM strings, map common words (morning/now/etc.) to canonical times, otherwise carry the keyword so the backend knows it still needs clarification.
 function parseTimeInput(value) {
   if (!value) return { time: '', keyword: '' };
   const trimmed = value.trim();
@@ -1429,6 +1622,9 @@ function parseTimeInput(value) {
   return { time: '', keyword: lower };
 }
 
+// WHAT: auto-populate fields when a reviewer picks an entity from the dropdown.
+// WHY: selecting a todo/calendar entry should bring in its metadata to reduce manual edits.
+// HOW: find the matching store entry, run the tool-specific `hydrate`, and populate both visible/hidden fields so selecting an ID instantly fills the editor.
 function hydrateEntitySelection(tool, entityId) {
   const config = ENTITY_FIELD_CONFIG[tool];
   if (!config || !entityId) {
@@ -1449,6 +1645,9 @@ function hydrateEntitySelection(tool, entityId) {
   }
 }
 
+// WHAT: sync pagination labels/buttons for the pending queue.
+// WHY: reviewers need to see how many cards remain and page through safely.
+// HOW: refresh the inline counter, page label, and pagination button states so reviewers always know where they are in the queue without guessing.
 function renderPendingMeta() {
   if (el.pendingCountInline) {
     const total = state.stats.pending?.total ?? state.pending.length;
@@ -1500,6 +1699,9 @@ function renderRelatedPrompts() {
   renderIntendedEntities();
 }
 
+// WHAT: guard to decide whether Intended Entities UI should appear.
+// WHY: only certain tool/action combos (list/find) can return multiple entities to label.
+// HOW: normalize the action name (respecting aliases) and check intent/action allowlists before rendering the Intended Entities row.
 function supportsIntendedEntities(intent, action) {
   if (!intent) return false;
   const normalizedAction = normalizeActionName(intent, action);
@@ -1552,6 +1754,9 @@ function renderIntendedEntities() {
   updateEntityOptions();
 }
 
+// WHAT: convert the current tool’s store rows into Intended Entity suggestions.
+// WHY: list/find reviewers need to tag which entries the system attempted to surface.
+// HOW: reuse `getEntityOptions` output but flatten it to `{id,title}` pairs so the Intended Entities dropdown can show lightweight chips regardless of tool schema.
 function getEntityOptionsForIntent(intent) {
   if (!intent) return [];
   const options = getEntityOptions(intent) || [];
@@ -1622,6 +1827,9 @@ function hideEntityOptions() {
   }
 }
 
+// WHAT: show the Related Prompts dropdown with conversational suggestions.
+// WHY: reviewers often need to tag follow-up utterances without typing them manually.
+// HOW: pull the merged suggestions, filter by the current search text, and render clickable rows so reviewers can attach context to the selected pending card without retyping.
 function updateRelatedPromptOptions(filterValue = '') {
   if (!el.relatedPromptsOptions || !el.relatedPromptsInput) return;
   hideEntityOptions();
@@ -1659,6 +1867,9 @@ function updateRelatedPromptOptions(filterValue = '') {
   el.relatedPromptsOptions.classList.remove('hidden');
 }
 
+// WHAT: close the Related Prompts dropdown when focus moves away.
+// WHY: prevents overlapping menus and accidental chip additions.
+// HOW: hide the suggestion list and clear its contents.
 function hideRelatedPromptOptions() {
   if (el.relatedPromptsOptions) {
     el.relatedPromptsOptions.classList.add('hidden');
@@ -1666,6 +1877,9 @@ function hideRelatedPromptOptions() {
   }
 }
 
+// WHAT: remove the floating editor panel from whichever card it was attached to.
+// WHY: ensures only one pending intent owns the editor at a time and avoids duplicate DOM nodes.
+// HOW: detach the panel from its parent and hide it until a new item is selected.
 function detachEditorPanel() {
   if (!el.editorPanel) {
     return;
@@ -1676,6 +1890,9 @@ function detachEditorPanel() {
   el.editorPanel.classList.add('hidden');
 }
 
+// WHAT: mount the editor panel inside the selected pending card.
+// WHY: keeps the correction form visually scoped to the active prompt.
+// HOW: append the panel to the slot div and reveal it.
 function attachEditorPanel(slot) {
   if (!el.editorPanel || !slot) return;
   slot.appendChild(el.editorPanel);
@@ -1937,6 +2154,9 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
   updateRequiredState();
 }
 
+// WHAT: normalize parser payloads into a flat `{fields, hidden}` structure for the editor.
+// WHY: form rendering needs predictable keys regardless of tool-specific nesting.
+// HOW: before the form renders we either apply a whitelist (weather/news) or fall back to canonicalization so each tool’s parser output maps cleanly into form fields.
 function prepareParserFields(tool, payload) {
   const whitelist = TOOL_FIELD_WHITELIST[tool];
   if (whitelist) {
@@ -1978,6 +2198,9 @@ function prepareParserFields(tool, payload) {
   return canonicalizeParserPayload(payload);
 }
 
+// WHAT: flatten arbitrary parser payloads while keeping ancillary lookup metadata.
+// WHY: CRUD tools share field components; this helper keeps their inputs consistent.
+// HOW: walk every parser key, remap known fields (title/id/keywords/etc.), and collect lookup metadata so the UI always receives flat text inputs plus hidden helpers.
 function canonicalizeParserPayload(payload) {
   const fields = {};
   const hidden = {};
@@ -2055,6 +2278,9 @@ function canonicalizeParserPayload(payload) {
   return { fields, hidden };
 }
 
+// WHAT: stringify payload values with optional joining/trimming rules.
+// WHY: text inputs require strings even when parser output is arrays/objects.
+// HOW: when parsers hand us arrays/objects we join or stringify them (trimming unless told otherwise) so every form control receives a plain string value.
 function formatFieldText(value, options = {}) {
   if (value === undefined || value === null) {
     return '';
@@ -2080,6 +2306,9 @@ function formatFieldText(value, options = {}) {
   return options.preserveSpacing ? text : text.trim();
 }
 
+// WHAT: determine if the title dropdown (vs. free text) should render for a tool/action.
+// WHY: update/delete flows often pick an existing title; create flows may not.
+// HOW: gate render-time logic by confirming the tool/action pair is allowed to use the title dropdown instead of a free-text input.
 function supportsTitleLookup(tool, action) {
   if (!TITLE_LOOKUP_TOOLS.has(tool)) {
     return false;
@@ -2090,6 +2319,9 @@ function supportsTitleLookup(tool, action) {
   return TITLE_LOOKUP_ACTIONS.has(action);
 }
 
+// WHAT: derive which fields to show for the correction form.
+// WHY: each tool/action needs a tailored set of inputs (e.g., todo find shows keywords only).
+// HOW: inspect tool overrides plus parser payload keys, merge them with required/extras, and dedupe so `renderDynamicFields` gets a definitive ordered list per tool/action.
 function computeFieldList(tool, action, payload) {
   const entityField = ENTITY_FIELD_CONFIG[tool]?.field;
   const override = TOOL_ACTION_FIELD_CONFIG[tool]?.[action];
@@ -2130,6 +2362,9 @@ function computeFieldList(tool, action, payload) {
   });
 }
 
+// WHAT: determine whether a field is mandatory for the current tool/action.
+// WHY: drives validation badges and button enablement.
+// HOW: consult action-specific overrides first, then fall back to tool defaults (with exceptions like todo-list list) so validation mirrors tool constraints.
 function isFieldRequired(tool, action, field) {
   if (!tool) return false;
   const overrideRequired = TOOL_ACTION_FIELD_CONFIG[tool]?.[action]?.required;
@@ -2155,6 +2390,9 @@ function isFieldRequired(tool, action, field) {
   return true;
 }
 
+// WHAT: build the correction form inputs for the selected tool/action.
+// WHY: reviewers must edit structured payloads that differ for each workflow.
+// HOW: derive the field list, render the right control type (select, textarea, datetime) with hydrated values, and place it according to layout metadata so the correction editor always mirrors the parser payload.
 function renderDynamicFields(tool, action) {
   if (!el.dynamicFieldGrid) return;
   const normalizedAction = normalizeActionName(tool, action);
@@ -2217,33 +2455,26 @@ function renderDynamicFields(tool, action) {
     const shouldUseTitleDropdown =
       TITLE_SELECT_TOOLS.has(tool) && TITLE_SELECT_ACTIONS.has(normalizedAction) && field === 'title';
     if (shouldUseTitleDropdown) {
-      const select = document.createElement('select');
-      const placeholderOption = document.createElement('option');
-      placeholderOption.value = '';
-      placeholderOption.textContent = 'Choose title';
-      select.appendChild(placeholderOption);
+      const container = document.createElement('div');
+      container.className = 'search-input';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Search title';
+      input.value = state.correctionFields[field] || state.hiddenFields.lookup_title || '';
+      const datalistId = `${tool}-${field}-options`;
+      input.setAttribute('list', datalistId);
+      const dataList = document.createElement('datalist');
+      dataList.id = datalistId;
       const options = getTitleOptions(tool);
-      const currentValue = state.correctionFields[field] || state.hiddenFields.lookup_title || '';
-      let hasCurrent = false;
       options.forEach(({ value, label: optionLabel }) => {
         const option = document.createElement('option');
         option.value = value;
-        option.textContent = optionLabel;
-        if (value === currentValue) {
-          option.selected = true;
-          hasCurrent = true;
-        }
-        select.appendChild(option);
+        option.label = optionLabel;
+        dataList.appendChild(option);
       });
-      if (currentValue && !hasCurrent) {
-        const option = document.createElement('option');
-        option.value = currentValue;
-        option.textContent = currentValue;
-        option.selected = true;
-        select.appendChild(option);
-      }
-      select.addEventListener('change', (event) => {
+      input.addEventListener('input', (event) => {
         const value = event.target.value;
+        const prevId = state.correctionFields.id;
         if (value) {
           state.correctionFields[field] = value;
           state.hiddenFields.lookup_title = value;
@@ -2254,10 +2485,15 @@ function renderDynamicFields(tool, action) {
           delete state.correctionFields.id;
         }
         flagReviewerChange(field);
-        renderDynamicFields(tool, normalizedAction);
         updateCorrectButtonState();
+        const idChanged = prevId !== state.correctionFields.id;
+        if (idChanged) {
+          renderDynamicFields(tool, normalizedAction);
+        }
       });
-      wrapper.appendChild(select);
+      container.appendChild(input);
+      container.appendChild(dataList);
+      wrapper.appendChild(container);
       applyFieldLayout(wrapper, tool, normalizedAction, field);
       targetGrid.appendChild(wrapper);
       return;
@@ -2338,6 +2574,9 @@ function renderDynamicFields(tool, action) {
   });
 }
 
+// WHAT: display prior corrections for the selected prompt.
+// WHY: reviewers need quick context on earlier edits before making another change.
+// HOW: filter `state.corrected` for the active prompt id, sort versions chronologically, and render them so reviewers can preview past triggers without leaving the editor.
 function renderVersionHistory() {
   if (!el.versionHistory) return;
   el.versionHistory.innerHTML = '';
@@ -2363,6 +2602,9 @@ function renderVersionHistory() {
   el.versionHistory.appendChild(list);
 }
 
+// WHAT: toggle the Trigger/Correct button label and disabled state.
+// WHY: prevents reviewers from firing incomplete payloads and clarifies whether a change is mutating.
+// HOW: look at the reviewer’s chosen intent/action and field values, then flip the button label (Trigger vs Correct) so submissions always reflect both requirements and whether the tool mutates data.
 function updateCorrectButtonState() {
   if (!el.correctButton || !state.selectedPrompt) {
     if (el.correctButton) {
@@ -2385,6 +2627,9 @@ function updateCorrectButtonState() {
   el.correctButton.textContent = MUTATING_ACTIONS.has(actionKey) ? 'Trigger' : 'Correct';
 }
 
+// WHAT: populate the summary of the most recently triggered correction.
+// WHY: provides a quick confirmation reference when reviewers fire multiple actions.
+// HOW: populate the sidebar text/pre block with the latest record (or a placeholder) so reviewers immediately see the last action they triggered after refreshes.
 function renderLatestConfirmed() {
   if (!state.latestConfirmed) {
     if (el.latestConfirmedTitle) {
@@ -2587,6 +2832,9 @@ function gatherCorrectionPayload() {
   };
 }
 
+// WHAT: merge live-added pending prompts into state without waiting for the next refresh.
+// WHY: keeps the queue responsive when new router decisions arrive from the chat endpoint.
+// HOW: normalize the record, insert/update it in `state.pending`, and preserve reviewer edits when possible.
 function addPendingRecord(record) {
   if (!record || !record.prompt_id) {
     return;
@@ -2616,6 +2864,9 @@ function addPendingRecord(record) {
   renderPendingList();
 }
 
+// WHAT: send the reviewer’s corrected payload to the backend and refresh derived views.
+// WHY: this is the core action (Trigger/Correct) that persists fixes and mutates stores.
+// HOW: gather form data, POST to `/api/logs/label`, update local queues/stores, and surface toast feedback.
 async function submitCorrection() {
   const payload = gatherCorrectionPayload();
   if (!payload) {
@@ -2644,6 +2895,9 @@ async function submitCorrection() {
   }
 }
 
+// WHAT: remove a pending intent without labeling it.
+// WHY: lets reviewers triage noise or duplicates quickly.
+// HOW: issue DELETE `/api/logs/pending/{id}`, clear selection if needed, and reload the queue list.
 async function deletePendingPrompt(item) {
   if (!item) return;
   const targetId = item.prompt_id || item.text_hash;
@@ -2665,6 +2919,9 @@ async function deletePendingPrompt(item) {
   }
 }
 
+// WHAT: display the classifier audit table inside the Training tab.
+// WHY: reviewers monitor low-confidence ML predictions to guide retraining.
+// HOW: iterate `state.classifier`, render each row with classifier vs. reviewer intent plus success flag styling.
 function renderClassifier() {
   if (!el.classifierTable) return;
   el.classifierTable.innerHTML = '';
@@ -2689,6 +2946,9 @@ function renderClassifier() {
   });
 }
 
+// WHAT: render the labeled prompt pairs table with predicted vs. corrected payloads.
+// WHY: gives reviewers an overview of recent training data and an option to delete test entries.
+// HOW: pretty-print both payloads in `<pre>` blocks and wire delete buttons to `/api/logs/corrected` so the Training view doubles as a lightweight QA surface.
 function renderCorrectedTable() {
   if (!el.correctedTable) return;
   el.correctedTable.innerHTML = '';
@@ -2733,6 +2993,9 @@ function renderCorrectedTable() {
   });
 }
 
+// WHAT: update the stats sidebar cards (pending counts, classifier backlog, etc.).
+// WHY: provides at-a-glance telemetry for Tier‑5 reviewers.
+// HOW: read `state.stats` and update the DOM counters/breakdowns (plus sample pending chips) so reviewers can gauge queue health without opening other tabs.
 function renderStats() {
   if (el.statsPending) {
     el.statsPending.textContent = state.stats.pending?.total ?? 0;
@@ -2753,6 +3016,9 @@ function renderStats() {
   renderPendingMeta();
 }
 
+// WHAT: helper to sort arrays descending by timestamp-like keys.
+// WHY: multiple data panels (todos/kitchen/etc.) want most recent entries first.
+// HOW: clone each list and sort by the chosen timestamp so todo/calendar/kitchen panels always show the freshest entries first.
 function sortNewestFirst(list, key = 'timestamp') {
   return [...(list || [])].sort((a, b) => {
     const aVal = a[key] || a.created_at || a.id || 0;
@@ -2761,6 +3027,9 @@ function sortNewestFirst(list, key = 'timestamp') {
   });
 }
 
+// WHAT: populate the Todos data panel with current store entries.
+// WHY: reviewers need quick visibility into persisted todos for context and manual QA.
+// HOW: sort cached store items, build list rows with key metadata, and inject into the DOM.
 function renderTodos() {
   if (!el.todosPanel) return;
   el.todosPanel.innerHTML = '';
@@ -2780,6 +3049,9 @@ function renderTodos() {
   });
 }
 
+// WHAT: render the calendar store list inside the Data panel.
+// WHY: helps reviewers verify scheduled events after running tools.
+// HOW: sort events, format start/end timestamps, and append list items with action badges.
 function renderCalendar() {
   if (!el.calendarPanel) return;
   el.calendarPanel.innerHTML = '';
@@ -2799,6 +3071,9 @@ function renderCalendar() {
   });
 }
 
+// WHAT: render the kitchen tips store grid.
+// WHY: reviewers double-check CRUD mutations and copy ids/titles easily.
+// HOW: sort tips alphabetically, show title/keywords/link, and include IDs for reference.
 function renderKitchen() {
   if (!el.kitchenList) return;
   el.kitchenList.innerHTML = '';
@@ -2831,6 +3106,9 @@ function renderKitchen() {
   });
 }
 
+// WHAT: render the app guide knowledge base section.
+// WHY: same as other stores—gives reviewers immediate insight into stored sections.
+// HOW: sort by title, show keywords/link/content snippet, and annotate with IDs.
 function renderGuide() {
   if (!el.guideList) return;
   el.guideList.innerHTML = '';
@@ -2863,6 +3141,9 @@ function renderGuide() {
   });
 }
 
+// WHAT: fetch a single data store (todos/calendar/etc.) from the backend and rerender it.
+// WHY: the Data tab should stay in sync after corrections or manual refreshes.
+// HOW: call `/api/data/{store}`, update the relevant cache slice, and trigger the renderer so the active data tab reflects the latest tool mutations.
 async function loadStore(store) {
   const data = await fetchJSON(`/api/data/${store}`);
   if (!data) return;
@@ -2882,10 +3163,16 @@ async function loadStore(store) {
   renderIntendedEntities();
 }
 
+// WHAT: bulk-refresh multiple stores in parallel.
+// WHY: faster initialization since todos/calendar/etc. can load concurrently.
+// HOW: run `loadStore` for each requested store concurrently so the Sync button and bootstrap refresh all panels without serial waits.
 async function refreshStores(stores = ['todos', 'calendar', 'kitchen_tips', 'app_guide']) {
   await Promise.all(stores.map((store) => loadStore(store)));
 }
 
+// WHAT: refresh whichever store tab is currently active.
+// WHY: ensures manual pagination/edits always show the freshest data.
+// HOW: pass the currently selected tab id into `loadStore` so manual refreshes only pull the visible dataset.
 function refreshActiveDataTab() {
   return loadStore(state.activeDataTab);
 }
@@ -3287,6 +3574,9 @@ function wireEvents() {
 
 }
 
+// WHAT: initialize the Tier‑5 dashboard and kick off background polling.
+// WHY: ensures listeners, cached state, initial data, and periodic refreshes are ready before reviewers interact.
+// HOW: wire events, restore stored UI state, fetch intents/stats/pending items, and start the auto-refresh interval.
 async function bootstrap() {
   wireEvents();
   setChatStatus('Ready');
@@ -3331,6 +3621,9 @@ const TOOL_FIELD_WHITELIST = {
   weather: ['city', 'time'],
   news: ['topic', 'language'],
 };
+// WHAT: decorate payloads for the training table (adds stable ids to related prompts chips).
+// WHY: keeps the simple DOM list stable without a full diffing framework.
+// HOW: deep-clone the payload and map `related_prompts` strings to `{text,id}` objects.
 function renderPayloadPreview(payload, listSelector) {
   const list = document.querySelector(listSelector);
   if (!list) return payload;

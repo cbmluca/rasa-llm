@@ -23,12 +23,14 @@ class ToolRegistry:
 
 # --- Registration: fail fast on duplicates to avoid shadowing tools
     def register_tool(self, name: str, fn: ToolFn) -> None:
+        """WHAT: add a tool, WHY: prevent duplicates, HOW: store callable."""
         if name in self._tools:
             raise ValueError(f"Tool '{name}' is already registered")
         self._tools[name] = fn
 
 # --- Execution: guard against missing tools so callers receive clear errors
     def run_tool(self, name: str, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
+        """WHAT: execute registered tool, WHY: orchestrator entry point, HOW: lookup and invoke."""
         try:
             tool_fn = self._tools[name]
         except KeyError as exc:
@@ -37,4 +39,5 @@ class ToolRegistry:
 
 # --- Snapshot: provide a copy to avoid external mutation of registry state
     def available_tools(self) -> Dict[str, ToolFn]:
+        """WHAT: expose registry snapshot, WHY: router prompt + introspection, HOW: return copy."""
         return dict(self._tools)

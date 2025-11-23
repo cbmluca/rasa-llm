@@ -25,10 +25,12 @@ LANGUAGE_MARKERS = ("english", "engelsk")
 
 
 def matches(lowered: str) -> bool:
+    """Guard to skip parsing when no news keywords are present."""
     return contains_keyword(lowered, NEWS_KEYWORDS)
 
 
 def parse(message: str) -> Optional[CommandResult]:
+    """Extract news topic/language hints for the news tool."""
     payload: Dict[str, object] = {"message": message, "domain": "news"}
     cleaned_message, language = _strip_language_markers(message)
     if language:
@@ -40,6 +42,7 @@ def parse(message: str) -> Optional[CommandResult]:
 
 
 def _strip_language_markers(message: str) -> tuple[str, Optional[str]]:
+    """Remove language hints ("english", "engelsk") and return ISO code."""
     lowered = message.lower()
     language: Optional[str] = None
     cleaned = message
@@ -52,6 +55,7 @@ def _strip_language_markers(message: str) -> tuple[str, Optional[str]]:
 
 
 def _extract_news_topic(message: str) -> str:
+    """Heuristically pull the topic requested after "news/headlines" keywords."""
     lowered = message.lower()
     for trigger in _NEWS_TRIGGERS:
         idx = lowered.find(trigger)
@@ -70,6 +74,7 @@ def _extract_news_topic(message: str) -> str:
 
 
 def _truncate_topic(topic: str) -> str:
+    """Trim trailing clauses so the topic stays concise."""
     for delimiter in ["?", "!", ".", ",", " and "]:
         parts = topic.split(delimiter, 1)
         if len(parts) > 1:

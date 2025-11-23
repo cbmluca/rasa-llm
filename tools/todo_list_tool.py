@@ -303,7 +303,15 @@ class TodoStore:
 
 
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Handle todo list commands driven by the orchestrator or router."""
+    """Tier‑3 todo tool shared by deterministic NLU and router fallbacks.
+
+    WHAT: execute list/find/create/update/delete semantics against the JSON
+    store.
+    WHY: centralizes validation + persistence so Tier‑1 never duplicates CRUD
+    logic in probes or UI code.
+    HOW: inspect the ``action`` field, normalize user payloads, and call
+    ``TodoStore`` helpers (optionally in dry-run mode for staged corrections).
+    """
 
     action = _normalize_action(payload.get("action"))
     store = TodoStore()

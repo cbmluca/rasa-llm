@@ -185,14 +185,14 @@ class LearningLogger:
         self._redaction_patterns.sort(key=lambda item: _PATTERN_PRIORITY.get(item[0], 10))
 
     def log_turn(self, record: TurnRecord) -> None:
-        """Persist a turn record if logging is enabled."""
+        """Append the turn JSON to ``turn_log_path`` (after optional redaction)."""
 
         if not self._enabled:
             return
         self._append_json_line(self._turn_log_path, asdict(record))
 
     def log_review_item(self, review: ReviewItem) -> None:
-        """Persist a review queue item if logging is enabled."""
+        """Append review items so Tier‑5 can load them later."""
 
         if not self._enabled:
             return

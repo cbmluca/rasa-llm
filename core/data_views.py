@@ -15,7 +15,7 @@ from core.text_utils import hash_text, normalize_text
 
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
-    """Yield parsed JSON objects from a JSONL file, skipping bad rows."""
+    """WHAT: stream JSONL rows, WHY: avoid loading entire files, HOW: tolerant parse."""
 
     if not path.exists():
         return
@@ -31,10 +31,12 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
 
 
 def iter_pending_prompts(path: Path) -> Iterator[dict]:
+    """Alias iter_jsonl for clarity when iterating pending queue files."""
     return iter_jsonl(path)
 
 
 def review_pending_prompts(path: Path, limit: int = 10, page: int = 1) -> list[dict]:
+    """Load a page of pending prompts newest-first for reporting/export."""
     entries = list(iter_pending_prompts(path))
     total = len(entries)
     if total == 0 or limit <= 0:
@@ -64,6 +66,7 @@ def export_pending(
     fmt: str,
     dedupe: bool,
 ) -> dict:
+    """Export pending prompts grouped by intent as CSV/JSON for audits."""
     groups: Dict[str, List[dict]] = {}
     seen_hashes: set[str] = set()
     for entry in iter_pending_prompts(pending_path):
@@ -107,6 +110,7 @@ def export_pending(
 
 
 def load_label_rows(path: Path, fmt: str) -> list[dict]:
+    """Parse labeled data files regardless of csv/json format."""
     if fmt == "csv":
         with path.open("r", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
@@ -119,7 +123,7 @@ def load_label_rows(path: Path, fmt: str) -> list[dict]:
 
 
 def normalize_intended_entities(values: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Return cleaned intended entity rows with id/title fields only."""
+    """Deduplicate/prettify intended entity annotations before persistence."""
 
     normalized: List[Dict[str, Any]] = []
     if not values:
@@ -139,6 +143,7 @@ def normalize_intended_entities(values: Optional[Sequence[Dict[str, Any]]]) -> L
 
 
 def load_label_lookup(path: Path) -> Dict[str, Dict[str, Optional[str]]]:
+    """Build hash->label mappings to dedupe classifier review entries."""
     lookup: Dict[str, Dict[str, Optional[str]]] = {}
     for record in iter_jsonl(path):
         text = record.get("text")
@@ -159,6 +164,7 @@ def append_labels(
     labeled_path: Path,
     dedupe: bool,
 ) -> dict:
+    """Append reviewer labels from imported CSV/JSON files."""
     rows = load_label_rows(input_path, fmt)
     config = load_intent_config()
     known_intents = set(config.names())
@@ -209,6 +215,7 @@ def append_label_entry(
     dedupe: bool = True,
     reviewer_action: Optional[str] = None,
 ) -> dict:
+    """Append a single labeled prompt entry (used by automated scripts)."""
     text_value = (text or "").strip()
     if not text_value:
         raise ValueError("Text is required for labeling.")
@@ -255,6 +262,7 @@ def append_correction_entry(
     corrected_payload: Optional[Dict[str, Any]] = None,
     updated_stores: Optional[List[str]] = None,
 ) -> dict:
+    """Persist a reviewer correction with versioned history."""
     identifier = (prompt_id or "").strip() or hash_text(prompt_text or "")
     if not identifier:
         identifier = uuid4().hex
@@ -313,6 +321,7 @@ def rehydrate_labeled_prompts(
     labeled_path: Path,
     pending_path: Path,
 ) -> dict:
+    """Move legacy labeled prompts back into the pending queue."""
     if not labeled_path.exists():
         return {"migrated": 0}
     legacy_entries = list(iter_jsonl(labeled_path))
@@ -364,6 +373,7 @@ def rehydrate_labeled_prompts(
 
 
 def delete_pending_entry(pending_path: Path, prompt_id: str) -> bool:
+    """Remove a pending intent by id or text hash."""
     if not prompt_id or not pending_path.exists():
         return False
     prompt_key = prompt_id.strip().lower()
@@ -392,6 +402,7 @@ def delete_pending_entry(pending_path: Path, prompt_id: str) -> bool:
 
 
 def get_pending_entry(pending_path: Path, prompt_id: str) -> Optional[dict]:
+    """Return the pending record matching ``prompt_id`` or its text hash."""
     if not prompt_id or not pending_path.exists():
         return None
     prompt_key = prompt_id.strip().lower()
@@ -511,6 +522,7 @@ def review_classifier_predictions(
     intent: Optional[str],
     limit: int,
 ) -> List[dict]:
+    """Surface classifier turns that were overridden or failed."""
     findings: List[dict] = []
     label_lookup = load_label_lookup(labeled_path) if labeled_path.exists() else {}
 
@@ -556,6 +568,7 @@ def list_recent_records(
     reverse: bool = True,
     predicate: Optional[Callable[[dict], bool]] = None,
 ) -> List[dict]:
+    """Read the last N JSONL rows with optional filtering."""
     rows = list(iter_jsonl(path))
     if predicate:
         rows = [row for row in rows if predicate(row)]
@@ -567,6 +580,7 @@ def list_recent_records(
 
 
 def load_labeled_prompts(path: Path, *, limit: int, intent: Optional[str] = None) -> List[dict]:
+    """Return recent labeled entries for the Training view."""
     def _predicate(record: dict) -> bool:
         if not intent:
             return True
@@ -577,6 +591,7 @@ def load_labeled_prompts(path: Path, *, limit: int, intent: Optional[str] = None
 
 
 def summarize_pending_queue(path: Path) -> dict:
+    """Compute total pending prompts and a per-intent breakdown."""
     total = 0
     by_intent: Dict[str, int] = {}
     for record in iter_pending_prompts(path):
@@ -587,6 +602,7 @@ def summarize_pending_queue(path: Path) -> dict:
 
 
 def list_pending_with_hashes(path: Path, *, limit: int, page: int = 1) -> List[dict]:
+    """Paginate pending entries while ensuring they have prompt ids + hashes."""
     rows = review_pending_prompts(path, limit, page)
     enriched: List[dict] = []
     for row in rows:
@@ -623,6 +639,7 @@ def load_corrected_prompts(
     page: int = 1,
     intent: Optional[str] = None,
 ) -> dict:
+    """Paginate corrected prompts for the Labeled Prompt Pairs table."""
     records = list(iter_jsonl(path))
     if intent:
         records = [
@@ -645,6 +662,7 @@ def load_corrected_prompts(
 
 
 def count_jsonl_rows(path: Path) -> int:
+    """Return number of rows in a JSONL file (used for stats cards)."""
     return sum(1 for _ in iter_jsonl(path))
 
 
