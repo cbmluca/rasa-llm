@@ -114,6 +114,7 @@ class TodoItem:
     notes: Optional[List[str]] = None
     deadline: Optional[str] = None
     priority: Optional[str] = None
+    link: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -161,6 +162,9 @@ class TodoStore:
         status: str,
         deadline: Optional[str],
         priority: Optional[str],
+        link: Optional[str] = None,
+        *,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         now = _utc_timestamp()
         entries = self._load_items()
@@ -168,7 +172,7 @@ class TodoStore:
         if any(entry.title.strip().lower() == normalized_title for entry in entries):
             raise ValueError("duplicate_title")
         item = TodoItem(
-            id=uuid.uuid4().hex,
+            id="pending" if dry_run else uuid.uuid4().hex,
             title=title,
             status=status,
             created_at=now,
@@ -176,9 +180,11 @@ class TodoStore:
             notes=notes,
             deadline=deadline,
             priority=priority,
+            link=link,
         )
-        entries.append(item)
-        self._write_items(entries)
+        if not dry_run:
+            entries.append(item)
+            self._write_items(entries)
         return item.to_dict()
 
     def update_todo(
@@ -192,9 +198,13 @@ class TodoStore:
         deadline: Optional[str] = None,
         clear_deadline: bool = False,
         priority: Optional[str] = None,
+        link: Optional[str] = None,
+        link_provided: bool = False,
+        dry_run: bool = False,
     ) -> Optional[Dict[str, Any]]:
         entries = self._load_items()
         updated: Optional[TodoItem] = None
+        updated_index: Optional[int] = None
         for idx, entry in enumerate(entries):
             if entry.id != todo_id:
                 continue
@@ -211,9 +221,10 @@ class TodoStore:
                 new_notes = notes
             else:
                 new_notes = entry.notes
-            new_priority = entry.priority
-            if priority is not None:
-                new_priority = priority
+            new_priority = priority if priority is not None else entry.priority
+            new_link = entry.link
+            if link_provided:
+                new_link = link
 
             new_entry = replace(
                 entry,
@@ -223,24 +234,33 @@ class TodoStore:
                 updated_at=_utc_timestamp(),
                 deadline=new_deadline,
                 priority=new_priority,
+                link=new_link,
             )
-            entries[idx] = new_entry
             updated = new_entry
+            updated_index = idx
             break
 
         if not updated:
             return None
-
-        self._write_items(entries)
+        if not dry_run and updated_index is not None:
+            entries[updated_index] = updated
+            self._write_items(entries)
         return updated.to_dict()
 
-    def delete_todo(self, todo_id: str) -> bool:
+    def delete_todo(self, todo_id: str, *, dry_run: bool = False) -> bool:
         entries = self._load_items()
         filtered = [entry for entry in entries if entry.id != todo_id]
         if len(filtered) == len(entries):
             return False
-        self._write_items(filtered)
+        if not dry_run:
+            self._write_items(filtered)
         return True
+
+    def get_entry(self, todo_id: str) -> Optional[TodoItem]:
+        for entry in self._load_items():
+            if entry.id == todo_id:
+                return entry
+        return None
 
     def find_entry_by_title(self, title: str) -> Optional[TodoItem]:
         title_norm = title.strip().lower()
@@ -272,6 +292,7 @@ class TodoStore:
                     updated_at=str(item.get("updated_at", "")).strip() or _utc_timestamp(),
                     deadline=_normalize_deadline(str(item.get("deadline", "")).strip() or None),
                     priority=_coerce_priority(item.get("priority")),
+                    link=_coerce_link(item.get("link")),
                 )
             )
         return entries
@@ -281,7 +302,7 @@ class TodoStore:
         atomic_write_json(self._storage_path, payload)
 
 
-def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     """Handle todo list commands driven by the orchestrator or router."""
 
     action = _normalize_action(payload.get("action"))
@@ -305,7 +326,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             "type": "todo_list",
             "domain": "todo",
             "action": "find",
-            "query": keywords,
+            "keywords": keywords,
             "todos": matches,
             "count": len(matches),
         }
@@ -314,7 +335,10 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         title = _extract_title(payload)
         if not title:
             return _error_response("create", "missing_title", "Todo title is required.")
-        notes = _normalize_notes(payload.get("notes")) or _extract_notes_from_message(payload)
+        notes_input = payload.get("notes")
+        if notes_input is None and payload.get("content") is not None:
+            notes_input = payload.get("content")
+        notes = _normalize_notes(notes_input) or _extract_notes_from_message(payload)
         try:
             status = _normalize_status(payload.get("status"))
         except ValueError as exc:
@@ -326,10 +350,21 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             return _error_response("create", "invalid_deadline", str(exc))
         message_deadline = _extract_deadline_from_message(payload) if not deadline_value else None
         deadline_iso = deadline_value or message_deadline
+        if not deadline_iso:
+            return _error_response("create", "missing_deadline", "Todo deadline is required.")
         priority = _extract_priority(payload)
+        link = _coerce_link(payload.get("link"))
 
         try:
-            todo = store.create_todo(title=title, notes=notes, status=status, deadline=deadline_iso, priority=priority)
+            todo = store.create_todo(
+                title=title,
+                notes=notes,
+                status=status,
+                deadline=deadline_iso,
+                priority=priority,
+                link=link,
+                dry_run=dry_run,
+            )
         except ValueError as exc:
             if str(exc) == "duplicate_title":
                 return _error_response("create", "duplicate_title", f"Todo '{title}' already exists.")
@@ -339,11 +374,11 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if action == "update":
         todo_id = str(payload.get("id", "")).strip()
-        target_title = payload.get("target_title")
-        if not todo_id and target_title:
-            entry = store.find_entry_by_title(str(target_title))
+        lookup_title = _coerce_lookup_title(payload)
+        if not todo_id and lookup_title:
+            entry = store.find_entry_by_title(lookup_title)
             if not entry:
-                return _error_response("update", "not_found", f"Todo '{target_title}' was not found.")
+                return _error_response("update", "not_found", f"Todo '{lookup_title}' was not found.")
             todo_id = entry.id
         if not todo_id and isinstance(payload.get("message"), str):
             implicit_title = _extract_title_from_message(payload["message"])
@@ -367,9 +402,14 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             status_value = None
 
-        notes_field_present = "notes" in payload
+        notes_field_present = "notes" in payload or "content" in payload
+        notes_source = None
+        if "notes" in payload:
+            notes_source = payload.get("notes")
+        elif "content" in payload:
+            notes_source = payload.get("content")
         if notes_field_present:
-            notes_value = _normalize_notes(payload.get("notes"))
+            notes_value = _normalize_notes(notes_source)
         else:
             notes_value = _extract_notes_from_message(payload)
             if notes_value:
@@ -383,6 +423,8 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         deadline_value = deadline_field_value or message_deadline
         deadline_requested = field_provided or message_deadline is not None
         priority_value = _extract_priority(payload)
+        link_provided = "link" in payload
+        link_value = _coerce_link(payload.get("link"))
 
         if (
             title_value is None
@@ -402,6 +444,9 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             deadline=deadline_value,
             clear_deadline=deadline_cleared,
             priority=priority_value,
+            link=link_value,
+            link_provided=link_provided,
+            dry_run=dry_run,
         )
         if not updated:
             return _error_response("update", "not_found", f"Todo '{todo_id}' was not found.")
@@ -410,14 +455,14 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if action == "delete":
         todo_id = str(payload.get("id", "")).strip()
-        target_title = payload.get("target_title") or payload.get("title")
-        if not todo_id and target_title:
-            entry = store.find_entry_by_title(str(target_title))
+        lookup_title = _coerce_lookup_title(payload)
+        if not todo_id and lookup_title:
+            entry = store.find_entry_by_title(lookup_title)
             if entry:
                 todo_id = entry.id
         if not todo_id:
             return _error_response("delete", "missing_id", "Todo ID or title is required to delete an item.")
-        removed = store.delete_todo(todo_id)
+        removed = store.delete_todo(todo_id, dry_run=dry_run)
         if not removed:
             return _error_response("delete", "not_found", f"Todo '{todo_id}' was not found.")
         return {"type": "todo_list", "domain": "todo", "action": "delete", "deleted": True, "id": todo_id}
@@ -440,10 +485,10 @@ def format_todo_response(result: Dict[str, Any]) -> str:
         return "Todos:\n" + "\n".join(lines)
     if action == "find":
         todos = result.get("todos") or []
-        query = result.get("query")
+        keywords = result.get("keywords")
         if not todos:
-            return f"No todos matched '{query}'." if query else "No todos matched those keywords."
-        tokens = _tokenize_keywords(query)
+            return f"No todos matched '{keywords}'." if keywords else "No todos matched those keywords."
+        tokens = _tokenize_keywords(keywords)
         if tokens:
             todos = sorted(
                 todos,
@@ -451,8 +496,8 @@ def format_todo_response(result: Dict[str, Any]) -> str:
             )
         lines = [_format_todo_line(item, include_done_tag=True) for item in todos]
         prefix = f"Found {len(todos)} todo(s)"
-        if query:
-            prefix += f" for '{query}'"
+        if keywords:
+            prefix += f" for '{keywords}'"
         return prefix + ":\n" + "\n".join(lines)
 
     if action == "create":
@@ -600,12 +645,22 @@ def _extract_notes_from_message(payload: Dict[str, Any]) -> Optional[List[str]]:
     return notes or None
 
 
+def _coerce_lookup_title(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("lookup_title", "title_lookup", "target_title"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    title_value = payload.get("title")
+    if isinstance(title_value, str) and title_value.strip():
+        return title_value.strip()
+    return None
+
+
 def _extract_search_keywords(payload: Dict[str, Any]) -> str:
     if "keywords" in payload:
         value = payload.get("keywords")
-        return str(value).strip() if value is not None else ""
-    if "query" in payload:
-        value = payload.get("query")
+        if isinstance(value, list):
+            return ", ".join(str(item).strip() for item in value if str(item).strip())
         return str(value).strip() if value is not None else ""
     message = payload.get("message")
     if isinstance(message, str):
@@ -725,6 +780,13 @@ def _normalize_priority(value: Any) -> Optional[str]:
 
 def _coerce_priority(value: Any) -> Optional[str]:
     return _normalize_priority(value)
+
+
+def _coerce_link(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _format_priority_label(priority: Optional[str]) -> Optional[str]:

@@ -20,52 +20,52 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     if "delete" in lowered:
         payload["action"] = "delete"
         if quotes:
-            payload["section_id"] = quotes[0]
+            payload["id"] = quotes[0]
         else:
-            section_id = _extract_section_id(message)
-            if section_id:
-                payload["section_id"] = section_id
+            entry_id = _extract_section_identifier(message)
+            if entry_id:
+                payload["id"] = entry_id
         return CommandResult(tool="app_guide", payload=payload)
 
     if any(word in lowered for word in ("update", "edit", "change", "upsert")):
         payload["action"] = "update"
         if quotes:
-            payload["section_id"] = quotes[0]
+            payload["id"] = quotes[0]
             if len(quotes) > 1:
                 payload["title"] = quotes[1]
             if len(quotes) > 2:
                 payload["content"] = quotes[2]
         else:
-            section_id = _extract_section_id(message)
-            if section_id:
-                payload["section_id"] = section_id
+            entry_id = _extract_section_identifier(message)
+            if entry_id:
+                payload["id"] = entry_id
         return CommandResult(tool="app_guide", payload=payload)
 
     if any(word in lowered for word in ("create", "add", "new", "write")):
         payload["action"] = "create"
         if quotes:
-            payload["section_id"] = quotes[0]
+            payload["id"] = quotes[0]
             if len(quotes) > 1:
                 payload["title"] = quotes[1]
             if len(quotes) > 2:
                 payload["content"] = quotes[2]
         else:
-            section_id = _extract_section_id(message)
-            if section_id:
-                payload["section_id"] = section_id
+            entry_id = _extract_section_identifier(message)
+            if entry_id:
+                payload["id"] = entry_id
         return CommandResult(tool="app_guide", payload=payload)
 
     if any(word in lowered for word in ("find", "search", "get")) or ("section" in lowered and "list" not in lowered):
         payload["action"] = "find"
-        section_id = None
+        entry_id = None
         if quotes:
-            payload["section_id"] = quotes[0]
-            section_id = quotes[0]
+            payload["id"] = quotes[0]
+            entry_id = quotes[0]
         else:
-            section_id = _extract_section_id(message)
-            if section_id:
-                payload["section_id"] = section_id
-        if not section_id:
+            entry_id = _extract_section_identifier(message)
+            if entry_id:
+                payload["id"] = entry_id
+        if not entry_id:
             payload["keywords"] = quotes[0] if quotes else message
         return CommandResult(tool="app_guide", payload=payload)
 
@@ -73,7 +73,7 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     return CommandResult(tool="app_guide", payload=payload)
 
 
-def _extract_section_id(message: str) -> Optional[str]:
+def _extract_section_identifier(message: str) -> Optional[str]:
     section = extract_after_keywords(message, ["for", "about", "section"])
     if section:
         tokens = section.split()

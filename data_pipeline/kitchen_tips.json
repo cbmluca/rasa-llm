@@ -3,23 +3,23 @@
     {
       "id": "0084c9f7b77849dc81020ca958ba7428",
       "title": "sear steaks at high heat first, then low heat until finished",
-      "body": "sear steaks at high heat first, then low heat until finished",
-      "tags": [
+      "link": "https://example.com/steak",
+      "content": "sear steaks at high heat first, then low heat until finished",
+      "keywords": [
         "meat"
-      ],
-      "link": "https://example.com/steak"
+      ]
     },
     {
       "id": "d5c48acf5df14f67b535134d6f7899da",
       "title": "add kitchen tip breakfast is good for you",
-      "body": "add kitchen tip breakfast is good for you",
-      "tags": []
+      "content": "add kitchen tip breakfast is good for you",
+      "keywords": []
     },
     {
       "id": "4f356bd2abea46a5828b55836b88e3c5",
       "title": "sear steaks at high heat first, then low heat until finished",
-      "body": "sear steaks at high heat first, then low heat until finished",
-      "tags": [
+      "content": "sear steaks at high heat first, then low heat until finished",
+      "keywords": [
         "steak",
         "searing"
       ]

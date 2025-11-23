@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, MutableMapping, Optional
+
+from core.tooling.query_helpers import tokenize_keywords
 
 GuideEntryDict = Dict[str, str]
 _DEFAULT_STORAGE_PATH = Path("data_pipeline/app_guide.json")
@@ -23,15 +25,22 @@ _DEFAULT_STORAGE_PATH = Path("data_pipeline/app_guide.json")
 class GuideEntry:
     """Represent a single knowledge section entry."""
 
-    section_id: str
+    id: str
     title: str
     content: str
     updated_at: str
+    keywords: List[str] = field(default_factory=list)
+    link: Optional[str] = None
 
     def to_dict(self) -> GuideEntryDict:
         """Return a JSON-serialisable dictionary."""
 
-        return asdict(self)
+        payload = asdict(self)
+        if not payload.get("link"):
+            payload.pop("link", None)
+        if not payload.get("keywords"):
+            payload["keywords"] = []
+        return payload
 
 
 class AppGuideStore:
@@ -44,55 +53,95 @@ class AppGuideStore:
     # Public API
     # ------------------------------------------------------------------
     def list_sections(self) -> List[GuideEntryDict]:
-        """Return every stored section as a list sorted by section_id."""
+        """Return every stored section as a list sorted by id."""
 
         sections = self._load_sections()
         return [sections[sid].to_dict() for sid in sorted(sections)]
 
-    def get_section(self, section_id: str) -> Optional[GuideEntryDict]:
-        """Return the stored section matching ``section_id`` if it exists."""
+    def get_section(self, entry_id: str) -> Optional[GuideEntryDict]:
+        """Return the stored section matching ``entry_id`` if it exists."""
 
         sections = self._load_sections()
-        entry = sections.get(section_id)
+        entry = sections.get(entry_id)
         return entry.to_dict() if entry else None
 
-    def upsert_section(self, section_id: str, title: str, content: str) -> GuideEntryDict:
+    def search_sections(self, keywords: str) -> List[GuideEntryDict]:
+        tokens = tokenize_keywords(keywords)
+        if not tokens:
+            return []
+        sections = self._load_sections()
+        matches: List[GuideEntryDict] = []
+        for entry in sections.values():
+            haystack_parts = [entry.title, entry.content, " ".join(entry.keywords or [])]
+            haystack = " ".join(part.lower() for part in haystack_parts if part)
+            if all(token in haystack for token in tokens):
+                matches.append(entry.to_dict())
+        return matches
+
+    def upsert_section(
+        self,
+        entry_id: str,
+        title: str,
+        content: str,
+        *,
+        keywords: Optional[List[str]] = None,
+        link: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> GuideEntryDict:
         """Insert or update a section entry in the knowledge base."""
 
-        if not section_id.strip():
-            raise ValueError("section_id cannot be blank")
+        if not entry_id.strip():
+            raise ValueError("id cannot be blank")
         if not title.strip():
             raise ValueError("title cannot be blank")
 
+        normalized_keywords = [kw.strip() for kw in (keywords or []) if kw and kw.strip()]
+
         sections = self._load_sections()
         entry = GuideEntry(
-            section_id=section_id,
+            id=entry_id,
             title=title,
             content=content,
             updated_at=_utc_timestamp(),
+            keywords=normalized_keywords,
+            link=link or None,
         )
-        sections[section_id] = entry
-        self._write_sections(sections)
+        if not dry_run:
+            sections[entry_id] = entry
+            self._write_sections(sections)
         return entry.to_dict()
 
-    def delete_section(self, section_id: str) -> bool:
+    def delete_section(self, entry_id: str, *, dry_run: bool = False) -> bool:
         """Remove a section from the knowledge base.
 
         Returns ``True`` when a section was deleted and ``False`` otherwise.
         """
 
         sections = self._load_sections()
-        if section_id not in sections:
+        if entry_id not in sections:
             return False
-        del sections[section_id]
-        self._write_sections(sections)
+        if not dry_run:
+            del sections[entry_id]
+            self._write_sections(sections)
         return True
+
+    def find_by_title(self, title: str) -> Optional[GuideEntryDict]:
+        """Return the first entry matching ``title`` (case-insensitive) if it exists."""
+
+        title_norm = title.strip().lower()
+        if not title_norm:
+            return None
+        sections = self._load_sections()
+        for entry in sections.values():
+            if entry.title.strip().lower() == title_norm:
+                return entry.to_dict()
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     def _load_sections(self) -> Dict[str, GuideEntry]:
-        """Read the JSON file and return a mapping of section_id to entry."""
+        """Read the JSON file and return a mapping of id to entry."""
 
         if not self._storage_path.exists():
             return {}
@@ -107,18 +156,21 @@ class AppGuideStore:
         if not isinstance(sections_raw, MutableMapping):
             raise ValueError("Invalid app guide format: 'sections' must be a mapping")
         sections: Dict[str, GuideEntry] = {}
-        for section_id, item in sections_raw.items():
-            if not isinstance(section_id, str):
+        for section_key, item in sections_raw.items():
+            if not isinstance(section_key, str):
                 raise ValueError("Invalid app guide format: section keys must be strings")
             if not isinstance(item, MutableMapping):
-                raise ValueError(f"Invalid section payload for '{section_id}'")
+                raise ValueError(f"Invalid section payload for '{section_key}'")
+            entry_id = str(item.get("id") or section_key)
             entry = GuideEntry(
-                section_id=section_id,
+                id=entry_id,
                 title=str(item.get("title", "")),
                 content=str(item.get("content", "")),
                 updated_at=str(item.get("updated_at", "")),
+                keywords=_coerce_keywords(item.get("keywords")),
+                link=str(item.get("link", "")).strip() or None,
             )
-            sections[section_id] = entry
+            sections[entry_id] = entry
         return sections
 
     def _write_sections(self, sections: Dict[str, GuideEntry]) -> None:
@@ -135,6 +187,17 @@ def _utc_timestamp() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _coerce_keywords(value: object) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    return [token.strip() for token in text.split(",") if token.strip()]
 
 
 __all__ = ["AppGuideStore", "GuideEntry", "GuideEntryDict"]

@@ -11,7 +11,7 @@ from typing import Dict, Protocol
 
 
 class ToolFn(Protocol):
-    def __call__(self, payload: Dict[str, object]) -> Dict[str, object]:
+    def __call__(self, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
         ...
 
 
@@ -28,12 +28,12 @@ class ToolRegistry:
         self._tools[name] = fn
 
 # --- Execution: guard against missing tools so callers receive clear errors
-    def run_tool(self, name: str, payload: Dict[str, object]) -> Dict[str, object]:
+    def run_tool(self, name: str, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
         try:
             tool_fn = self._tools[name]
         except KeyError as exc:
             raise KeyError(f"Tool '{name}' is not registered") from exc
-        return tool_fn(payload)
+        return tool_fn(payload, dry_run=dry_run)
 
 # --- Snapshot: provide a copy to avoid external mutation of registry state
     def available_tools(self) -> Dict[str, ToolFn]:

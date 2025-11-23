@@ -36,7 +36,7 @@ class StubOrchestrator:
             response_summary="It is sunny",
         )
 
-    def run_tool(self, tool_name: str, payload: dict) -> dict:
+    def run_tool(self, tool_name: str, payload: dict, *, dry_run: bool = False) -> dict:
         self.tool_calls.append((tool_name, payload))
         if tool_name == "todo_list":
             return {"todos": [{"id": "1", "title": "Test", "status": "pending"}]}

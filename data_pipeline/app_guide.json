@@ -1,22 +1,25 @@
 {
   "sections": {
     "Test": {
-      "section_id": "Test",
       "title": "tier_policies",
       "content": "this is a test",
-      "updated_at": "2025-11-08T10:06:26.745044+00:00"
+      "updated_at": "2025-11-08T10:06:26.745044+00:00",
+      "id": "Test",
+      "keywords": []
     },
     "hello": {
-      "section_id": "hello",
       "title": "hello",
       "content": "hello",
-      "updated_at": "2025-11-08T10:06:38.476752+00:00"
+      "updated_at": "2025-11-08T10:06:38.476752+00:00",
+      "id": "hello",
+      "keywords": []
     },
     "tier_policies": {
-      "section_id": "tier_policies",
       "title": "test",
       "content": "this is a test, please delete me",
-      "updated_at": "2025-11-08T10:07:19.154104+00:00"
+      "updated_at": "2025-11-08T10:07:19.154104+00:00",
+      "id": "tier_policies",
+      "keywords": []
     }
   }
 }

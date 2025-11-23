@@ -118,6 +118,26 @@ def load_label_rows(path: Path, fmt: str) -> list[dict]:
     raise ValueError("Label import expects a list of objects.")
 
 
+def normalize_intended_entities(values: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Return cleaned intended entity rows with id/title fields only."""
+
+    normalized: List[Dict[str, Any]] = []
+    if not values:
+        return normalized
+    for entry in values:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or entry.get("label") or "").strip()
+        identifier = str(entry.get("id") or entry.get("value") or "").strip()
+        if not title:
+            continue
+        item: Dict[str, Any] = {"title": title}
+        if identifier:
+            item["id"] = identifier
+        normalized.append(item)
+    return normalized
+
+
 def load_label_lookup(path: Path) -> Dict[str, Dict[str, Optional[str]]]:
     lookup: Dict[str, Dict[str, Optional[str]]] = {}
     for record in iter_jsonl(path):
@@ -241,6 +261,14 @@ def append_correction_entry(
 
     normalized_predicted = normalize_parser_payload(dict(predicted_payload or {}))
     normalized_corrected = normalize_parser_payload(dict(corrected_payload or {}))
+    if "intended_entities" in normalized_predicted:
+        normalized_predicted["intended_entities"] = normalize_intended_entities(
+            normalized_predicted.get("intended_entities")
+        )
+    if "intended_entities" in normalized_corrected:
+        normalized_corrected["intended_entities"] = normalize_intended_entities(
+            normalized_corrected.get("intended_entities")
+        )
 
     if parser_intent and "intent" not in normalized_predicted:
         normalized_predicted["intent"] = parser_intent
@@ -363,6 +391,18 @@ def delete_pending_entry(pending_path: Path, prompt_id: str) -> bool:
     return True
 
 
+def get_pending_entry(pending_path: Path, prompt_id: str) -> Optional[dict]:
+    if not prompt_id or not pending_path.exists():
+        return None
+    prompt_key = prompt_id.strip().lower()
+    for row in iter_jsonl(pending_path):
+        row_prompt = str(row.get("prompt_id") or "").strip().lower()
+        row_hash = hash_text(row.get("user_text") or "")
+        if prompt_key and prompt_key in {row_prompt, row_hash}:
+            return row
+    return None
+
+
 def dedupe_pending_prompts(pending_path: Path) -> dict:
     if not pending_path.exists():
         return {"deduped": 0}
@@ -398,6 +438,11 @@ def append_pending_prompt(
     reason: str = "chat_submission",
     extras: Optional[Dict[str, Any]] = None,
     tool_name: Optional[str] = None,
+    staged: bool = False,
+    related_prompts: Optional[List[str]] = None,
+    conversation_entry_id: Optional[str] = None,
+    field_versions: Optional[Dict[str, str]] = None,
+    intended_entities: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> dict:
     text_value = (message or "").strip()
     if not text_value:
@@ -407,6 +452,11 @@ def append_pending_prompt(
     prompt_hash = hash_text(text_value)
     identifier = uuid4().hex
     normalized_payload = normalize_parser_payload(parser_payload or {})
+    normalized_versions = dict(field_versions or {})
+    if not normalized_versions:
+        for key in normalized_payload.keys():
+            if key not in {"intent"}:
+                normalized_versions[key] = "system"
 
     existing_ids: set[str] = set()
     existing_hashes: set[str] = set()
@@ -424,6 +474,10 @@ def append_pending_prompt(
 
     extras_payload = extras if isinstance(extras, dict) else {}
 
+    prompts_payload = [prompt.strip() for prompt in related_prompts or [] if isinstance(prompt, str) and prompt.strip()]
+    if text_value and text_value not in prompts_payload:
+        prompts_payload.append(text_value)
+
     record = {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "user_text": text_value,
@@ -437,6 +491,11 @@ def append_pending_prompt(
         "predicted_payload": dict(normalized_payload),
         "prompt_id": identifier,
         "text_hash": prompt_hash,
+        "staged": bool(staged),
+        "related_prompts": prompts_payload,
+        "conversation_entry_id": conversation_entry_id,
+        "field_versions": normalized_versions,
+        "intended_entities": normalize_intended_entities(intended_entities),
     }
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     with pending_path.open("a", encoding="utf-8") as handle:
@@ -537,12 +596,17 @@ def list_pending_with_hashes(path: Path, *, limit: int, page: int = 1) -> List[d
             prompt_id = hash_text(text) or uuid4().hex
         parser_payload = row.get("parser_payload") or {}
         normalized_payload = normalize_parser_payload(parser_payload)
+        related_prompts = row.get("related_prompts") or ([text] if text else [])
+        field_versions = row.get("field_versions") or {}
         enriched.append(
             {
                 **row,
                 "text_hash": hash_text(text),
                 "prompt_id": prompt_id,
                 "parser_payload": normalized_payload,
+                "related_prompts": related_prompts,
+                "field_versions": field_versions,
+                "intended_entities": normalize_intended_entities(row.get("intended_entities")),
             }
         )
     return enriched

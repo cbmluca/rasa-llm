@@ -22,6 +22,7 @@ from app.config import (
 )
 from app.main import build_orchestrator
 from core.data_views import (
+    iter_jsonl,
     append_correction_entry,
     append_labels,
     append_pending_prompt,
@@ -36,29 +37,17 @@ from core.data_views import (
     rehydrate_labeled_prompts,
     review_classifier_predictions,
     summarize_pending_queue,
+    get_pending_entry,
 )
 from core.orchestrator import Orchestrator, OrchestratorResponse
 from core.intent_config import load_intent_config
+from core.tooling.store_config import DATA_STORE_TO_TOOL, TOOL_TO_STORE, is_mutating_action
+from core.text_utils import hash_text
 
 
 STATIC_DIR = Path("web/static")
 EXPORT_DIR = Path("data_pipeline/nlu_training_bucket/exports")
 
-
-DATA_STORE_TO_TOOL = {
-    "todos": {"tool": "todo_list", "list_payload": {"action": "list"}},
-    "kitchen_tips": {"tool": "kitchen_tips", "list_payload": {"action": "list"}},
-    "calendar": {"tool": "calendar_edit", "list_payload": {"action": "list"}},
-    "app_guide": {"tool": "app_guide", "list_payload": {"action": "list"}},
-}
-
-TOOL_TO_STORE = {config["tool"]: store_id for store_id, config in DATA_STORE_TO_TOOL.items()}
-STORE_MUTATING_ACTIONS = {
-    "todos": {"create", "update", "delete"},
-    "kitchen_tips": {"create"},
-    "calendar": {"create", "update", "delete"},
-    "app_guide": {"upsert", "delete"},
-}
 
 
 class ChatRequest(BaseModel):
@@ -163,6 +152,12 @@ def create_app(
             raise HTTPException(status_code=400, detail="Message is required.")
         result = app.state.orchestrator.handle_message_with_details(message)
         formatted = _format_response(result)
+        formatted_extras = formatted.get("extras") or {}
+        history_prompts = [
+            entry.get("user_text", "")
+            for entry in formatted_extras.get("conversation_history") or []
+            if isinstance(entry, dict) and entry.get("user_text")
+        ]
         try:
             pending_result = append_pending_prompt(
                 pending_path=app.state.pending_path,
@@ -171,8 +166,11 @@ def create_app(
                 parser_payload=result.nlu_result.entities,
                 confidence=result.nlu_result.confidence,
                 reason=formatted.get("review_reason") or "chat_submission",
-                extras=formatted.get("extras"),
+                extras=formatted_extras,
                 tool_name=formatted.get("tool", {}).get("name"),
+                staged=formatted_extras.get("staged", False),
+                related_prompts=history_prompts,
+                conversation_entry_id=formatted_extras.get("conversation_entry_id"),
             )
             if pending_result.get("record"):
                 formatted["pending_record"] = pending_result["record"]
@@ -225,6 +223,29 @@ def create_app(
         )
         return data
 
+    @app.delete("/api/logs/corrected/{record_id}")
+    def delete_corrected(record_id: str) -> Dict[str, Any]:
+        if not record_id:
+            raise HTTPException(status_code=400, detail="record_id is required.")
+        corrected_path = app.state.corrected_path
+        if not corrected_path.exists():
+            raise HTTPException(status_code=404, detail="No labeled prompts found.")
+        removed = False
+        remaining: List[dict] = []
+        for row in iter_jsonl(corrected_path):
+            if row.get("id") == record_id or row.get("correction_id") == record_id:
+                removed = True
+                continue
+            remaining.append(row)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Labeled prompt not found.")
+        corrected_path.parent.mkdir(parents=True, exist_ok=True)
+        with corrected_path.open("w", encoding="utf-8") as handle:
+            for row in remaining:
+                handle.write(json.dumps(row, ensure_ascii=False))
+                handle.write("\n")
+        return {"deleted": True}
+
     @app.post("/api/logs/label")
     def label_prompt(payload: CorrectionPayload) -> Dict[str, Any]:
         reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
@@ -237,10 +258,11 @@ def create_app(
         predicted_payload = dict(payload.predicted_payload or {})
         updated_stores: List[str] = []
         tool_result: Optional[Dict[str, Any]] = None
+        pending_record = get_pending_entry(app.state.pending_path, payload.prompt_id)
 
         store_id = TOOL_TO_STORE.get(payload.tool)
         action_value = str(corrected_payload.get("action") or "").strip().lower()
-        should_mutate = bool(store_id and action_value in STORE_MUTATING_ACTIONS.get(store_id, set()))
+        should_mutate = is_mutating_action(payload.tool, action_value)
 
         if should_mutate:
             try:
@@ -267,6 +289,17 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         delete_pending_entry(app.state.pending_path, payload.prompt_id)
+        related_prompts = corrected_payload.get("related_prompts") or []
+        for prompt_text in related_prompts:
+            text_value = (prompt_text or "").strip()
+            if not text_value:
+                continue
+            prompt_hash = hash_text(text_value)
+            if prompt_hash:
+                delete_pending_entry(app.state.pending_path, prompt_hash)
+        if pending_record:
+            conversation_entry_id = pending_record.get("conversation_entry_id")
+            app.state.orchestrator.update_conversation_payload(conversation_entry_id, corrected_payload)
 
         return {"record": record, "updated_stores": updated_stores, "latest_tool_result": tool_result}
 
@@ -276,7 +309,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="prompt_id is required.")
         removed = delete_pending_entry(app.state.pending_path, prompt_id)
         if not removed:
-            raise HTTPException(status_code=404, detail="Pending prompt not found.")
+            raise HTTPException(status_code=404, detail="Pending intent not found.")
         return {"deleted": True}
 
     @app.get("/api/intents")

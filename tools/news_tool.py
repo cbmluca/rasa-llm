@@ -289,7 +289,7 @@ def _filter_allowed_sources(items: List[Dict[str, str]]) -> List[Dict[str, str]]
 
 
 # --- Execution logic -------------------------------------------------------
-def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     """Return curated headlines for the requested ``topic``."""
 
     message_text = payload.get("message")

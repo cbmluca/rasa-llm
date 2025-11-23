@@ -3,9 +3,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Iterable, List, Sequence
 
 from core.text_utils import normalize_text
+
+_TOKEN_SANITIZER = re.compile(r"[^a-z0-9]+")
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "be",
+    "can",
+    "do",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "make",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "should",
+    "the",
+    "to",
+    "what",
+    "why",
+    "with",
+}
 
 
 @dataclass
@@ -19,7 +51,17 @@ class QueryResult:
 def tokenize_keywords(text: str | None) -> List[str]:
     if not text:
         return []
-    return [token for token in normalize_text(text).split() if token]
+    tokens: List[str] = []
+    for raw in normalize_text(text).split():
+        cleaned = _TOKEN_SANITIZER.sub("", raw)
+        if not cleaned:
+            continue
+        if cleaned in _STOPWORDS:
+            continue
+        if len(cleaned) <= 2:
+            continue
+        tokens.append(cleaned)
+    return tokens
 
 
 def best_effort_keywords(payload: dict, keys: Sequence[str] = ("keywords", "query", "title")) -> str:
@@ -27,6 +69,10 @@ def best_effort_keywords(payload: dict, keys: Sequence[str] = ("keywords", "quer
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+        if isinstance(value, list):
+            joined = ", ".join(str(item).strip() for item in value if str(item).strip())
+            if joined.strip():
+                return joined.strip()
     message = payload.get("message")
     if isinstance(message, str):
         return message.strip()

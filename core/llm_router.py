@@ -76,6 +76,36 @@ class LLMRouter:
             return "LLM routing returned no content."
         return self._parse_response(content)
 
+    def suggest_tool(self, message: str) -> str | None:
+        """Ask the LLM to suggest a single tool even if it wouldn't normally run one."""
+
+        tools = ", ".join(self._enabled_tools) or "none"
+        prompt = (
+            "Based on the user prompt, choose the single most relevant tool name from this list "
+            f"({tools}) or return \"none\" if none apply.\n"
+            "Respond with JSON like {\"tool\": \"name\"}."
+        )
+        content, error = self._chat_completion(
+            messages=[
+                {"role": "system", "content": "You classify prompts into tool names."},
+                {"role": "user", "content": f"{prompt}\nUser: {message}"},
+            ],
+            label="Tool suggestion",
+            temperature=0.1,
+        )
+        if error or not content:
+            return None
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        tool = data.get("tool")
+        if isinstance(tool, str):
+            value = tool.strip()
+            if value and value.lower() != "none":
+                return value
+        return None
+
     def general_answer(self, message: str) -> str:
         content, error = self._chat_completion(
             messages=[

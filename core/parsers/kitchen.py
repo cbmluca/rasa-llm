@@ -25,14 +25,14 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
         if not title:
             title = message
         payload["title"] = title
-        payload["body"] = title
+        payload["content"] = title
         tags = extract_json_array_after_keyword(message, "tags")
         if not tags:
             tag_match = re.search(r"tags?\s+([A-Za-z0-9 ,/]+)", message, re.IGNORECASE)
             if tag_match:
                 tags = [tag.strip() for tag in tag_match.group(1).split(",") if tag.strip()]
         if tags:
-            payload["tags"] = tags
+            payload["keywords"] = tags
         link_match = re.search(r"link\s+(https?://\S+)", message, re.IGNORECASE)
         if link_match:
             payload["link"] = link_match.group(1).strip()
@@ -47,7 +47,7 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     ):
         payload["action"] = "find"
         query = extract_after_keywords(message, ["about", "for"]) or extract_title_from_text(message) or message
-        payload["query"] = query.strip(' "')
+        payload["keywords"] = query.strip(' "')
         return CommandResult(tool="kitchen_tips", payload=payload)
 
     if "get kitchen" in lowered or ("kitchen tip" in lowered and "list" not in lowered):

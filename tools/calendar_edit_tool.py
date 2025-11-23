@@ -53,6 +53,8 @@ class CalendarStore:
 
     def search_events(self, keywords: str) -> List[Dict[str, str]]:
         tokens = tokenize_keywords(keywords)
+        if not tokens:
+            return []
         events = [event.to_dict() for event in self._load_events()]
         for event in events:
             event['_search_fields'] = [event.get('title', ''), event.get('location', ''), event.get('notes', '')]
@@ -69,11 +71,13 @@ class CalendarStore:
         notes: Optional[str],
         location: Optional[str],
         link: Optional[str],
+        *,
+        dry_run: bool = False,
     ) -> Dict[str, str]:
         start_iso, end_iso = _normalize_range(start, end)
         now = _utc_timestamp()
         event = CalendarEvent(
-            id=uuid.uuid4().hex,
+            id="pending" if dry_run else uuid.uuid4().hex,
             title=title,
             start=start_iso,
             end=end_iso,
@@ -83,9 +87,10 @@ class CalendarStore:
             location=location or None,
             link=link or None,
         )
-        events = self._load_events()
-        events.append(event)
-        self._write_events(events)
+        if not dry_run:
+            events = self._load_events()
+            events.append(event)
+            self._write_events(events)
         return event.to_dict()
 
     def update_event(
@@ -101,9 +106,11 @@ class CalendarStore:
         clear_notes: bool = False,
         clear_location: bool = False,
         clear_link: bool = False,
+        dry_run: bool = False,
     ) -> Optional[Dict[str, str]]:
         events = self._load_events()
         updated: Optional[CalendarEvent] = None
+        updated_index: Optional[int] = None
         for idx, event in enumerate(events):
             if event.id != event_id:
                 continue
@@ -141,22 +148,24 @@ class CalendarStore:
                 link=next_link,
                 updated_at=_utc_timestamp(),
             )
-            events[idx] = new_event
             updated = new_event
+            updated_index = idx
             break
 
         if not updated:
             return None
-
-        self._write_events(events)
+        if not dry_run and updated_index is not None:
+            events[updated_index] = updated
+            self._write_events(events)
         return updated.to_dict()
 
-    def delete_event(self, event_id: str) -> bool:
+    def delete_event(self, event_id: str, *, dry_run: bool = False) -> bool:
         events = self._load_events()
         filtered = [event for event in events if event.id != event_id]
         if len(filtered) == len(events):
             return False
-        self._write_events(filtered)
+        if not dry_run:
+            self._write_events(filtered)
         return True
 
     def _load_events(self) -> List[CalendarEvent]:
@@ -207,7 +216,7 @@ class CalendarStore:
         return None
 
 
-def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     """Entry point for calendar operations."""
 
     action_raw = str(payload.get("action", "list")).strip().lower()
@@ -254,17 +263,23 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError as exc:
             return _error_response("create", "invalid_datetime", str(exc))
 
-        event = store.create_event(title=title, start=start_dt, end=end_dt, notes=notes, location=location, link=link)
+        event = store.create_event(
+            title=title,
+            start=start_dt,
+            end=end_dt,
+            notes=notes,
+            location=location,
+            link=link,
+            dry_run=dry_run,
+        )
         return {"type": "calendar_edit", "domain": "calendar", "action": "create", "event": event}
 
     if action == "update":
         event_id = str(payload.get("id", "")).strip()
         if not event_id:
-            lookup_title = payload.get("target_title")
-            if not lookup_title:
-                lookup_title = payload.get("title")
+            lookup_title = _coerce_lookup_title(payload)
             if lookup_title:
-                entry = store.find_event_by_title(str(lookup_title))
+                entry = store.find_event_by_title(lookup_title)
                 if entry:
                     event_id = entry.id
         if not event_id:
@@ -336,6 +351,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
             clear_notes=notes_value is not None and notes_text is None,
             clear_location=location_present and location_text is None,
             clear_link=link_present and link_text is None,
+            dry_run=dry_run,
         )
         if not updated:
             return _error_response("update", "not_found", f"Event '{event_id}' was not found.")
@@ -344,14 +360,14 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
     if action == "delete":
         event_id = str(payload.get("id", "")).strip()
         if not event_id:
-            lookup_title = payload.get("target_title") or payload.get("title")
+            lookup_title = _coerce_lookup_title(payload)
             if lookup_title:
-                entry = store.find_event_by_title(str(lookup_title))
+                entry = store.find_event_by_title(lookup_title)
                 if entry:
                     event_id = entry.id
         if not event_id:
             return _error_response("delete", "missing_id", "Event ID or title is required to delete an entry.")
-        removed = store.delete_event(event_id)
+        removed = store.delete_event(event_id, dry_run=dry_run)
         if not removed:
             return _error_response("delete", "not_found", f"Event '{event_id}' was not found.")
         return {"type": "calendar_edit", "domain": "calendar", "action": "delete", "deleted": True, "id": event_id}
@@ -414,6 +430,17 @@ def _normalize_range(start: datetime, end: Optional[datetime]) -> Tuple[str, str
     if end < start:
         raise ValueError("Event end time cannot be before the start time.")
     return start.isoformat(), end.isoformat()
+
+
+def _coerce_lookup_title(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("lookup_title", "title_lookup", "target_title"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    title_value = payload.get("title")
+    if isinstance(title_value, str) and title_value.strip():
+        return title_value.strip()
+    return None
 
 
 def _utc_timestamp() -> str:

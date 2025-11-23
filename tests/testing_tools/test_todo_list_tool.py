@@ -11,11 +11,15 @@ from core.command_parser import parse_command
 from tools import todo_list_tool as todo_list
 
 
+def _future_deadline(days: int = 30) -> str:
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
 def test_todo_run_create_update_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    created = todo_list.run({"action": "create", "title": "Buy milk"})
+    created = todo_list.run({"action": "create", "title": "Buy milk", "deadline": _future_deadline()})
     assert created["action"] == "create"
     assert created["todo"]["title"] == "Buy milk"
 
@@ -40,8 +44,8 @@ def test_todo_run_find(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    todo_list.run({"action": "create", "title": "Buy milk"})
-    todo_list.run({"action": "create", "title": "Follow up with QA"})
+    todo_list.run({"action": "create", "title": "Buy milk", "deadline": _future_deadline(5)})
+    todo_list.run({"action": "create", "title": "Follow up with QA", "deadline": _future_deadline(10)})
 
     found = todo_list.run({"action": "find", "keywords": "milk"})
     assert found["action"] == "find"
@@ -85,8 +89,10 @@ def test_todo_run_validations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     missing_title = todo_list.run({"action": "create"})
     assert missing_title["error"] == "missing_title"
+    missing_deadline = todo_list.run({"action": "create", "title": "No date"})
+    assert missing_deadline["error"] == "missing_deadline"
 
-    created = todo_list.run({"action": "create", "title": "Task"})
+    created = todo_list.run({"action": "create", "title": "Task", "deadline": _future_deadline()})
     todo_id = created["todo"]["id"]
 
     bad_status = todo_list.run({"action": "update", "id": todo_id, "status": "bogus"})
@@ -100,7 +106,7 @@ def test_todo_run_accepts_add_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    result = todo_list.run({"action": "add", "title": "Alias task"})
+    result = todo_list.run({"action": "add", "title": "Alias task", "deadline": _future_deadline()})
     assert result["action"] == "create"
     assert result["todo"]["title"] == "Alias task"
 
@@ -109,7 +115,7 @@ def test_todo_run_uses_message_as_title(tmp_path: Path, monkeypatch: pytest.Monk
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    result = todo_list.run({"action": "create", "message": "Message based title"})
+    result = todo_list.run({"action": "create", "message": "Message based title", "deadline": _future_deadline()})
     assert result["todo"]["title"] == "Message based title"
 
 
@@ -119,16 +125,17 @@ def test_todo_deadlines_sorting_and_countdown(tmp_path: Path, monkeypatch: pytes
 
     soon = (date.today() + timedelta(days=3)).strftime("%d/%m/%Y")
     later = (date.today() + timedelta(days=10)).strftime("%d/%m/%Y")
+    mid = (date.today() + timedelta(days=20)).strftime("%d/%m/%Y")
+    far = (date.today() + timedelta(days=30)).strftime("%d/%m/%Y")
 
     todo_list.run({"action": "create", "title": "Later", "deadline": later})
     todo_list.run({"action": "create", "title": "Soon", "deadline": soon})
-    todo_list.run({"action": "create", "title": "Beta"})
-    todo_list.run({"action": "create", "title": "Alpha"})
+    todo_list.run({"action": "create", "title": "Beta", "deadline": mid})
+    todo_list.run({"action": "create", "title": "Alpha", "deadline": far})
 
     listed = todo_list.run({"action": "list"})
     titles = [todo["title"] for todo in listed["todos"]]
-    assert titles[:2] == ["Soon", "Later"]
-    assert titles[2:] == ["Alpha", "Beta"]
+    assert titles == ["Soon", "Later", "Beta", "Alpha"]
     days_until = listed["todos"][0].get("deadline_days_until")
     assert days_until == 3
 
@@ -145,7 +152,7 @@ def test_todo_notes_list_and_clearing(tmp_path: Path, monkeypatch: pytest.Monkey
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    created = todo_list.run({"action": "create", "title": "Prep dinner", "notes": "Chop veggies"})
+    created = todo_list.run({"action": "create", "title": "Prep dinner", "notes": "Chop veggies", "deadline": _future_deadline()})
     todo = created["todo"]
     assert todo["notes"] == ["Chop veggies"]
 
@@ -180,8 +187,8 @@ def test_todo_duplicate_titles_are_rejected(tmp_path: Path, monkeypatch: pytest.
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    todo_list.run({"action": "create", "title": "Duplicate"})
-    duplicate = todo_list.run({"action": "create", "title": "Duplicate"})
+    todo_list.run({"action": "create", "title": "Duplicate", "deadline": _future_deadline()})
+    duplicate = todo_list.run({"action": "create", "title": "Duplicate", "deadline": _future_deadline(60)})
     assert duplicate["error"] == "duplicate_title"
 
 
@@ -189,7 +196,7 @@ def test_todo_update_and_delete_by_title(tmp_path: Path, monkeypatch: pytest.Mon
     storage_path = tmp_path / "todos.json"
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
-    created = todo_list.run({"action": "create", "title": "By Title"})
+    created = todo_list.run({"action": "create", "title": "By Title", "deadline": _future_deadline()})
     assert created["action"] == "create"
 
     updated = todo_list.run({"action": "update", "target_title": "By Title", "status": "completed"})
@@ -204,7 +211,7 @@ def test_todo_message_priority_and_title_cleanup(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(todo_list, "_DEFAULT_STORAGE_PATH", storage_path)
 
     message = "Add a todo reminding me to buy coffee beans next Friday, mark it as urgent."
-    created = todo_list.run({"action": "create", "message": message})
+    created = todo_list.run({"action": "create", "message": message, "deadline": _future_deadline(7)})
     todo = created["todo"]
 
     assert todo["title"].lower() == "buy coffee beans next friday"

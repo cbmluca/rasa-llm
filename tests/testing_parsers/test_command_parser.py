@@ -111,7 +111,7 @@ def test_share_kitchen_tip_maps_to_search():
     assert result is not None
     assert result.tool == "kitchen_tips"
     assert result.payload["action"] == "find"
-    assert "cast iron" in result.payload.get("query", "").lower()
+    assert "cast iron" in (result.payload.get("keywords") or "").lower()
 
 
 def test_add_kitchen_tip_via_form():
@@ -120,7 +120,7 @@ def test_add_kitchen_tip_via_form():
     assert result.tool == "kitchen_tips"
     assert result.payload["action"] == "create"
     assert "Chill the bowl" in result.payload.get("title", "")
-    assert "dessert" in (result.payload.get("tags") or [])
+    assert "dessert" in (result.payload.get("keywords") or [])
 
 
 def test_list_kitchen_tips_phrase():
@@ -142,7 +142,7 @@ def test_app_guide_update_detects_section_id():
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "update"
-    assert result.payload.get("section_id") == "tier_policies"
+    assert result.payload.get("id") == "tier_policies"
 
 
 def test_app_guide_get_with_quotes():
@@ -150,7 +150,7 @@ def test_app_guide_get_with_quotes():
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "find"
-    assert result.payload.get("section_id") == "tier_policies"
+    assert result.payload.get("id") == "tier_policies"
 
 
 def test_calendar_defaults_start_to_now(monkeypatch):

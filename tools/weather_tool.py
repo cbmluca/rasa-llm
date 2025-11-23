@@ -104,7 +104,7 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 
 
 # --- Orchestrator-facing tool functions ------------------------------------
-def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
 
     city = _resolve_city(payload)

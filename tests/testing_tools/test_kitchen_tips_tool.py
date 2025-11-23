@@ -17,11 +17,11 @@ def test_kitchen_tips_list_find(tmp_path: Path, monkeypatch) -> None:
             {
                 "id": "boil_pasta",
                 "title": "Boil pasta",
-                "body": "Salt the water generously.",
-                "tags": ["pasta"],
+                "content": "Salt the water generously.",
+                "keywords": ["pasta"],
                 "link": "https://example.com/pasta",
             },
-            {"id": "store_herbs", "title": "Store herbs", "body": "Keep herbs in water in the fridge.", "tags": ["herbs"]},
+            {"id": "store_herbs", "title": "Store herbs", "content": "Keep herbs in water in the fridge.", "keywords": ["herbs"]},
         ]
     }
     storage_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -33,7 +33,7 @@ def test_kitchen_tips_list_find(tmp_path: Path, monkeypatch) -> None:
     assert fetched["tips"][0]["title"] == "Boil pasta"
     assert fetched["tips"][0]["link"] == "https://example.com/pasta"
 
-    search = kitchen_tips.run({"action": "find", "query": "herbs"})
+    search = kitchen_tips.run({"action": "find", "keywords": "herbs"})
     assert search["count"] == 1
     assert search["tips"][0]["id"] == "store_herbs"
 
@@ -68,8 +68,8 @@ def test_kitchen_tips_create(tmp_path: Path, monkeypatch) -> None:
         {
             "action": "create",
             "title": "Sear steaks hot",
-            "body": "Sear at high heat then finish low.",
-            "tags": ["meat", "steak"],
+            "content": "Sear at high heat then finish low.",
+            "keywords": ["meat", "steak"],
             "link": "https://example.com/steak",
         }
     )
@@ -85,8 +85,8 @@ def test_kitchen_tips_update_and_delete(tmp_path: Path, monkeypatch) -> None:
             {
                 "id": "tip123",
                 "title": "Old title",
-                "body": "Old body",
-                "tags": ["legacy"],
+                "content": "Old body",
+                "keywords": ["legacy"],
                 "link": "https://example.com/old",
             }
         ]
@@ -98,13 +98,13 @@ def test_kitchen_tips_update_and_delete(tmp_path: Path, monkeypatch) -> None:
             "action": "update",
             "id": "tip123",
             "title": "New title",
-            "body": "New body",
-            "tags": ["fresh"],
+            "content": "New body",
+            "keywords": ["fresh"],
             "link": "https://example.com/new",
         }
     )
     assert updated["tip"]["title"] == "New title"
-    assert updated["tip"]["tags"] == ["fresh"]
+    assert updated["tip"]["keywords"] == ["fresh"]
 
     deleted = kitchen_tips.run({"action": "delete", "id": "tip123"})
     assert deleted["deleted"] is True

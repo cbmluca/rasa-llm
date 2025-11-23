@@ -50,7 +50,7 @@
             <div class="pending-column">
               <div class="pending-toolbar">
                 <div>
-                  <p class="hint">Pending prompts</p>
+                  <p class="hint">Pending intents</p>
                   <h3 id="pending-count-inline">0</h3>
                 </div>
                 <div class="pending-controls">
@@ -75,17 +75,37 @@
                 <select id="action-select"></select>
               </label>
             </div>
+            <div class="related-prompts-row">
+              <div class="related-prompts-header">
+                <span>Related prompts</span>
+                <div class="entity-picker">
+                  <input id="related-prompts-input" type="text" placeholder="Add prompt…" autocomplete="off" />
+                  <ul id="related-prompts-options" class="entity-options hidden"></ul>
+                </div>
+              </div>
+              <ul id="related-prompts-list" class="related-prompts-list"></ul>
+            </div>
+            <div class="intended-entities-row hidden" id="intended-entities-row">
+              <div class="intended-entities-header">
+                <span>Intended entities</span>
+                <div class="entity-picker">
+                  <input id="entity-search-input" type="text" placeholder="Search entities…" autocomplete="off" />
+                  <ul id="entity-search-options" class="entity-options hidden"></ul>
+                </div>
+              </div>
+              <ul id="intended-entities-list" class="related-prompts-list"></ul>
+            </div>
             <div class="field-grid" id="dynamic-field-grid"></div>
             <div class="version-history" id="version-history"></div>
             <div class="form-actions">
-              <button id="correct-button" class="button primary" type="button" disabled>Correct</button>
+              <button id="correct-button" class="button primary" type="button" disabled>Trigger</button>
             </div>
           </div>
           <div class="latest-confirmed" id="latest-confirmed-card">
             <div>
               <p class="hint">Latest Confirmed</p>
               <h3 id="latest-confirmed-title">No corrections yet.</h3>
-              <p class="hint" id="latest-confirmed-meta">Corrected payloads appear here after you save.</p>
+              <p class="hint" id="latest-confirmed-meta">Triggered payloads appear here after you run them.</p>
             </div>
             <div id="latest-confirmed-payload"></div>
           </div>
@@ -145,17 +165,19 @@
               <ul class="list" id="kitchen-list"></ul>
               <form id="kitchen-form" class="inline-form">
                 <input name="title" placeholder="Tip title" required />
-                <input name="tags" placeholder="Tags (comma separated)" />
+                <input name="keywords" placeholder="Keywords (comma separated)" />
                 <input name="link" placeholder="Link" />
-                <textarea name="body" placeholder="Tip details"></textarea>
+                <textarea name="content" placeholder="Tip details"></textarea>
                 <button class="button primary" type="submit">Add Tip</button>
               </form>
             </div>
             <div class="data-panel-view" data-store="app_guide">
               <ul class="list" id="guide-list"></ul>
               <form id="guide-form" class="inline-form">
-                <input name="section_id" placeholder="Section ID" required />
+                <input name="id" placeholder="Entry ID" required />
                 <input name="title" placeholder="Title" required />
+                <input name="keywords" placeholder="Keywords (comma separated)" />
+                <input name="link" placeholder="Link" />
                 <textarea name="content" placeholder="Content" required></textarea>
                 <button class="button primary" type="submit">Save Section</button>
               </form>
@@ -167,7 +189,7 @@
       <div class="page-view" id="training-page">
         <section class="stats" id="stats-cards">
           <div class="stat-card">
-            <p class="label">Pending Prompts</p>
+            <p class="label">Pending Intents</p>
             <p class="value" id="pending-count">0</p>
             <p class="hint" id="pending-breakdown">–</p>
           </div>
@@ -220,6 +242,7 @@
                 <th>Prompt</th>
                 <th>Predicted</th>
                 <th>Corrected</th>
+                <th></th>
               </tr>
             </thead>
             <tbody></tbody>

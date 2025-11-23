@@ -24,6 +24,7 @@ from core.payload_builder import PayloadBuilder
 from core.orchestrator import Orchestrator
 from core.tool_registry import ToolRegistry
 from core.intent_classifier import IntentClassifier
+from core.conversation_memory import ConversationMemory
 from tools import load_all_core_tools
 
 # -- Orchestrator construction -------------------------------------------------
@@ -54,7 +55,8 @@ def build_orchestrator() -> Orchestrator:
         backup_count=get_log_backup_count(),
     )
 
-    return Orchestrator(nlu=nlu, registry=registry, router=router, logger=logger)
+    memory = ConversationMemory(max_turns=10)
+    return Orchestrator(nlu=nlu, registry=registry, router=router, logger=logger, conversation_memory=memory)
 
 # -- Interactive CLI loop ------------------------------------------------------
 def main() -> None:

@@ -20,16 +20,16 @@ class KitchenTip:
 
     id: str
     title: str
-    body: str
-    tags: List[str]
+    content: str
+    keywords: List[str]
     link: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
             "id": self.id,
             "title": self.title,
-            "body": self.body,
-            "tags": list(self.tags),
+            "content": self.content,
+            "keywords": list(self.keywords),
         }
         if self.link:
             data["link"] = self.link
@@ -49,9 +49,11 @@ class KitchenTipsStore:
 
     def search(self, keywords: str) -> List[Dict[str, Any]]:
         tokens = tokenize_keywords(keywords)
+        if not tokens:
+            return []
         entries = [entry.to_dict() for entry in self._load_entries()]
         for entry in entries:
-            entry['_search_fields'] = ['title', 'body', 'tags']
+            entry['_search_fields'] = ['title', 'content', 'keywords']
         ranked = rank_entries(entries, tokens, key=lambda tip: tip['title'].lower())
         filtered: List[Dict[str, Any]] = []
         for entry in ranked:
@@ -64,17 +66,26 @@ class KitchenTipsStore:
             filtered.append(entry)
         return filtered
 
-    def create_tip(self, title: str, body: Optional[str], tags: List[str], link: Optional[str]) -> Dict[str, Any]:
+    def create_tip(
+        self,
+        title: str,
+        content: Optional[str],
+        keywords: List[str],
+        link: Optional[str],
+        *,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
         entries = self._load_entries()
         tip = KitchenTip(
-            id=uuid.uuid4().hex,
+            id="pending" if dry_run else uuid.uuid4().hex,
             title=title,
-            body=body or title,
-            tags=tags,
+            content=content or title,
+            keywords=keywords,
             link=link,
         )
-        entries.append(tip)
-        self._write_entries(entries)
+        if not dry_run:
+            entries.append(tip)
+            self._write_entries(entries)
         return tip.to_dict()
 
     def update_tip(
@@ -83,35 +94,41 @@ class KitchenTipsStore:
         tip_id: Optional[str],
         title_lookup: Optional[str],
         new_title: Optional[str] = None,
-        body: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        content: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
         link: Any = None,
         link_provided: bool = False,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         entries = self._load_entries()
         title_norm = title_lookup.strip().lower() if title_lookup else None
         match: Optional[KitchenTip] = None
+        match_index: Optional[int] = None
         for entry in entries:
             if tip_id and entry.id == tip_id:
                 match = entry
+                match_index = entries.index(entry)
                 break
             if title_norm and entry.title.strip().lower() == title_norm:
                 match = entry
+                match_index = entries.index(entry)
                 break
         if not match:
             raise ValueError("not_found")
         if new_title:
             match.title = new_title
-        if body is not None:
-            match.body = body
-        if tags is not None:
-            match.tags = tags
+        if content is not None:
+            match.content = content
+        if keywords is not None:
+            match.keywords = keywords
         if link_provided:
             match.link = link or None
-        self._write_entries(entries)
+        if not dry_run and match_index is not None:
+            entries[match_index] = match
+            self._write_entries(entries)
         return match.to_dict()
 
-    def delete_tip(self, *, tip_id: Optional[str], title_lookup: Optional[str]) -> bool:
+    def delete_tip(self, *, tip_id: Optional[str], title_lookup: Optional[str], dry_run: bool = False) -> bool:
         entries = self._load_entries()
         title_norm = title_lookup.strip().lower() if title_lookup else None
         remaining: List[KitchenTip] = []
@@ -126,7 +143,8 @@ class KitchenTipsStore:
             remaining.append(entry)
         if not deleted:
             return False
-        self._write_entries(remaining)
+        if not dry_run:
+            self._write_entries(remaining)
         return True
 
     def _load_entries(self) -> List[KitchenTip]:
@@ -142,14 +160,19 @@ class KitchenTipsStore:
             tip_id = str(item.get("id", "")).strip()
             if not tip_id:
                 continue
-            tags_raw = item.get("tags") or []
-            tags = [str(tag).strip() for tag in tags_raw if isinstance(tag, str) and tag.strip()]
+            keywords_raw = item.get("keywords")
+            if keywords_raw is None:
+                keywords_raw = item.get("tags")
+            keywords = [str(tag).strip() for tag in (keywords_raw or []) if isinstance(tag, str) and tag.strip()]
+            content_value = str(item.get("content", "")).strip()
+            if not content_value:
+                content_value = str(item.get("body", "")).strip()
             entries.append(
                 KitchenTip(
                     id=tip_id,
                     title=str(item.get("title", "")).strip(),
-                    body=str(item.get("body", "")).strip(),
-                    tags=tags,
+                    content=content_value,
+                    keywords=keywords,
                     link=str(item.get("link", "")).strip() or None,
                 )
             )
@@ -174,7 +197,7 @@ class KitchenTipsStore:
         return None
 
 
-def run(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     """Handle kitchen tip lookup commands."""
 
     action = str(payload.get("action", "list")).strip().lower() or "list"
@@ -194,7 +217,7 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if action == "find":
         tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
-        title_lookup = str(payload.get("title") or payload.get("target_title") or "").strip()
+        title_lookup = _coerce_lookup_title(payload)
         if tip_id or title_lookup:
             tip = store.find_by_id(tip_id) if tip_id else None
             if not tip and title_lookup:
@@ -211,15 +234,9 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "query": tip_id or title_lookup,
                 "exact_match": True,
             }
-        keywords = best_effort_keywords(payload, keys=("keywords", "query"))
-        query = str(payload.get("query", "")).strip()
-        search_term = query or keywords
+        search_term = best_effort_keywords(payload, keys=("keywords",))
         if not search_term.strip():
-            return _error_response(
-                "find",
-                "missing_keywords",
-                "Provide keywords, a query, or a tip id/title to search your tips.",
-            )
+            return _error_response("find", "missing_keywords", "Provide keywords or a tip id/title to search your tips.")
         tips = store.search(search_term)
         return {
             "type": "kitchen_tips",
@@ -235,42 +252,38 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
         title = str(payload.get("title", "")).strip()
         if not title:
             return _error_response("create", "missing_title", "A title is required to add a kitchen tip.")
-        body = str(payload.get("body", "")).strip() or None
-        tags = payload.get("tags") or []
-        if not isinstance(tags, list):
-            tags = []
-        tags_clean = [str(tag).strip() for tag in tags if str(tag).strip()]
-        link = payload.get("link")
-        if link:
-            link = str(link).strip()
-        tip = store.create_tip(title=title, body=body, tags=tags_clean, link=link or None)
+        content = str(payload.get("content") or payload.get("body") or "").strip() or None
+        keywords = _normalize_keywords(payload.get("keywords"))
+        link = _coerce_link(payload.get("link"))
+        tip = store.create_tip(title=title, content=content, keywords=keywords, link=link, dry_run=dry_run)
         return {"type": "kitchen_tips", "domain": "kitchen", "action": "create", "tip": tip}
 
     if action == "update":
         tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
-        target_title = str(payload.get("target_title") or "").strip()
-        if not tip_id and not target_title:
+        lookup_title = _coerce_lookup_title(payload)
+        if not tip_id and not lookup_title:
             return _error_response("update", "missing_id", "Provide a tip id or title to update.")
         new_title = str(payload.get("title") or payload.get("new_title") or "").strip() or None
-        body_value = payload.get("body")
-        body = str(body_value).strip() if isinstance(body_value, str) else body_value
-        tags = payload.get("tags") if "tags" in payload else None
-        if tags is not None:
-            if not isinstance(tags, list):
-                return _error_response("update", "invalid_tags", "Tags must be provided as a list.")
-            tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+        content_value = payload.get("content")
+        if content_value is None and "body" in payload:
+            content_value = payload.get("body")
+        content = str(content_value).strip() if isinstance(content_value, str) else content_value
+        keywords = None
+        if "keywords" in payload:
+            keywords = _normalize_keywords(payload.get("keywords"))
         link_provided = "link" in payload
         link_value: Any = payload.get("link")
-        link_str = str(link_value).strip() if isinstance(link_value, str) else link_value
+        link_str = _coerce_link(link_value) if link_provided else None
         try:
             updated = store.update_tip(
                 tip_id=tip_id or None,
-                title_lookup=target_title or None,
+                title_lookup=lookup_title or None,
                 new_title=new_title,
-                body=body,
-                tags=tags,
+                content=content,
+                keywords=keywords,
                 link=link_str,
                 link_provided=link_provided,
+                dry_run=dry_run,
             )
         except ValueError as exc:
             if str(exc) == "not_found":
@@ -280,10 +293,10 @@ def run(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if action == "delete":
         tip_id = str(payload.get("id") or payload.get("tip_id") or "").strip()
-        target_title = str(payload.get("target_title") or payload.get("title") or "").strip()
-        if not tip_id and not target_title:
+        lookup_title = _coerce_lookup_title(payload)
+        if not tip_id and not lookup_title:
             return _error_response("delete", "missing_id", "Provide a tip id or title to delete.")
-        deleted = store.delete_tip(tip_id=tip_id or None, title_lookup=target_title or None)
+        deleted = store.delete_tip(tip_id=tip_id or None, title_lookup=lookup_title or None, dry_run=dry_run)
         if not deleted:
             return _error_response("delete", "not_found", "The requested tip was not found.")
         return {"type": "kitchen_tips", "domain": "kitchen", "action": "delete", "deleted": True}
@@ -312,7 +325,7 @@ def format_kitchen_tips_response(result: Dict[str, Any]) -> str:
             return _with_raw_output(f"No kitchen tips found for '{query or 'your search'}'.", result)
         if result.get("exact_match"):
             tip = tips[0]
-            message = f"{tip.get('title', 'Tip')}:\n{tip.get('body', 'No details provided.')}"
+            message = f"{tip.get('title', 'Tip')}:\n{tip.get('content', 'No details provided.')}"
             return _with_raw_output(message, result)
         lines = [f"- {tip.get('title', 'Untitled')} (#{tip.get('id')})" for tip in tips]
         return _with_raw_output(f"Matches for '{query}':\n" + "\n".join(lines), result)
@@ -338,6 +351,37 @@ def _with_raw_output(message: str, payload: Dict[str, Any], include_raw: bool = 
     if not include_raw:
         return message
     return f"{message}\nRaw:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
+
+
+def _coerce_lookup_title(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("lookup_title", "title_lookup", "target_title"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    title_value = payload.get("title")
+    if isinstance(title_value, str) and title_value.strip():
+        return title_value.strip()
+    return None
+
+
+def _normalize_keywords(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    if "," in text:
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return [text]
+
+
+def _coerce_link(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 __all__ = ["run", "format_kitchen_tips_response", "KitchenTipsStore", "KitchenTip"]

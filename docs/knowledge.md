@@ -32,3 +32,6 @@
 - Defaults (NLU threshold, enabled tools, log paths, redaction, web UI host) live in `app/config.py`. Secrets stay in `.env`.
 - `core/learning_logger.py` scrubs PII by default; only disable redaction for local debugging and document the decision.
 - Legacy Rasa bot is still in `legacy_rasa/` for reference but isn’t part of the runtime.
+
+## Future features
+- **Ensembles of LLMs** – Stand up a comparison harness that routes critical prompts through multiple foundation models, diffs their structured outputs, and flags divergent facts for reviewer attention so we can spot hallucinations before they hit users.
