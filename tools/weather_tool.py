@@ -104,16 +104,10 @@ def get_hourly_forecast(lat: float, lon: float) -> Dict[str, List[Any]]:
 
 
 # --- Orchestrator-facing tool functions ------------------------------------
+    # WHAT: geocode the city, honor time hints, and fetch either current conditions or hourly forecasts.
+    # WHY: Tier‑1 needs deterministic weather responses so router and CLI outputs stay aligned.
+    # HOW: sanitize the payload, call Open‑Meteo helpers, prefer forecasts when a target hour exists, otherwise return current conditions plus metadata.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Fetch weather data from Open-Meteo and normalize it for Tier‑1.
-
-    WHAT: geocode user-provided city/time hints, query the weather APIs, and
-    return structured temperature/forecast fields.
-    WHY: Tier‑1 needs a deterministic weather tool so both CLI and router
-    results stay consistent even when probes/LLM disagree.
-    HOW: sanitize payload, call the `WeatherClient` helpers, and wrap the
-    response with extra metadata (domain/action) consumed by the orchestrator.
-    """
     """Resolve ``payload`` into current or forecasted weather for the requested city."""
 
     city = _resolve_city(payload)
@@ -174,6 +168,9 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     }
 
 
+    # WHAT: decide which city string to use when calling the weather APIs.
+    # WHY: payloads may include structured `city` fields or only a free-form message.
+    # HOW: prefer sanitized `city`/`location`, otherwise infer from the message, falling back to `_DEFAULT_CITY`.
 def _resolve_city(payload: Dict[str, Any]) -> str:
     raw_city = str(payload.get("city") or payload.get("location") or "").strip()
     normalized = _normalize_city_name(raw_city)
@@ -187,6 +184,9 @@ def _resolve_city(payload: Dict[str, Any]) -> str:
     return _DEFAULT_CITY
 
 
+    # WHAT: sanitize user-provided city names before geocoding.
+    # WHY: removes extra words/symbols so Open‑Meteo matches the right location.
+    # HOW: strip non-letter characters, drop stop words, and cap the final string length.
 def _normalize_city_name(candidate: str) -> str:
     if not candidate:
         return ""
@@ -203,6 +203,9 @@ def _normalize_city_name(candidate: str) -> str:
     return normalized[:_CITY_MAX_LENGTH]
 
 
+    # WHAT: extract a city mention from the free-form message.
+    # WHY: lets prompts like “weather in Berlin tomorrow” resolve even without structured fields.
+    # HOW: run regex heuristics to capture “in/for <city>” phrases and normalize the result.
 def _infer_city_from_message(message: Any) -> str:
     if not isinstance(message, str):
         return ""
@@ -224,6 +227,9 @@ def _infer_city_from_message(message: Any) -> str:
     return ""
 
 # --- Formatting helpers ----------------------------------------------------
+    # WHAT: turn the structured weather payload into a chat-friendly sentence.
+    # WHY: the orchestrator reuses this text for both CLI and router responses.
+    # HOW: build a header (current vs forecast), append temperature/notes, and include error messages when present.
 def format_weather_response(result: Dict[str, Any]) -> str:
     """Create a short, human-friendly weather summary."""
     if "error" in result:
@@ -272,6 +278,9 @@ _WEEKDAY_INDEX = {
 }
 
 
+    # WHAT: convert parser-provided time hints into a concrete UTC datetime.
+    # WHY: the weather tool chooses between hourly forecast vs current conditions based on this target.
+    # HOW: normalize day/hour/minute hints, clamp values, and combine with today’s date plus an offset.
 def _resolve_target_datetime(time_hint: Dict[str, Any]) -> Optional[datetime]:
     day_hint = str(time_hint.get("day", "")).strip().lower()
     hour = time_hint.get("hour")
@@ -299,6 +308,9 @@ def _resolve_target_datetime(time_hint: Dict[str, Any]) -> Optional[datetime]:
     return dt_obj.replace(minute=0, second=0, microsecond=0)
 
 
+    # WHAT: translate relative day strings into offsets from today.
+    # WHY: users say “tomorrow” or “next Wednesday” rather than exact dates.
+    # HOW: map common phrases and weekday names to offsets, defaulting to zero.
 def _resolve_day_offset(day_hint: str, now: datetime) -> int:
     if not day_hint:
         return 0
@@ -340,6 +352,9 @@ def _resolve_day_offset(day_hint: str, now: datetime) -> int:
     return 0
 
 
+    # WHAT: compute how many days until the requested weekday.
+    # WHY: supports phrases like “next Wednesday” or “this weekend”.
+    # HOW: use modulo arithmetic and optionally include today when the weekday matches.
 def _days_until_weekday(target_idx: int, now: datetime, *, include_today: bool) -> int:
     today_idx = now.weekday()
     delta = (target_idx - today_idx) % 7
@@ -348,6 +363,9 @@ def _days_until_weekday(target_idx: int, now: datetime, *, include_today: bool) 
     return delta
 
 
+    # WHAT: infer a representative hour when only day parts are provided.
+    # WHY: “this evening” should pick 19:00 so forecast matching works consistently.
+    # HOW: map common phrases to default hours and return None when unknown.
 def _default_hour_for_hint(day_hint: str) -> Optional[int]:
     mapping = {
         "this morning": 9,
@@ -365,6 +383,9 @@ def _default_hour_for_hint(day_hint: str) -> Optional[int]:
     return mapping.get(day_hint or "")
 
 
+    # WHAT: find the hourly forecast entry nearest to the target datetime.
+    # WHY: Open‑Meteo returns arrays of timestamps/temps/codes that need to be aligned.
+    # HOW: iterate the hourly list, compute deltas, and return the closest match as a dict.
 def _pick_hourly_entry(hourly: Dict[str, List[Any]], target: datetime) -> Optional[Dict[str, Any]]:
     times = hourly.get("time") or []
     temps = hourly.get("temperature_2m") or []
@@ -403,6 +424,9 @@ def _pick_hourly_entry(hourly: Dict[str, List[Any]], target: datetime) -> Option
     }
 
 
+    # WHAT: format ISO timestamps into a short human-readable string.
+    # WHY: used when building forecast headers in `format_weather_response`.
+    # HOW: parse via `datetime.fromisoformat` and fall back to the raw text on failure.
 def _format_timestamp(timestamp: str) -> str:
     try:
         dt_obj = datetime.fromisoformat(timestamp)
@@ -411,6 +435,9 @@ def _format_timestamp(timestamp: str) -> str:
     return dt_obj.strftime("%b %d %H:%M")
 
 
+    # WHAT: create a human-readable label describing the requested time.
+    # WHY: response headers (“Weather in Copenhagen tomorrow at 09:00”) rely on this string.
+    # HOW: use explicit day/hour hints when present, otherwise fall back to the raw text or resolved datetime.
 def _describe_time_label(time_hint: Optional[Dict[str, Any]], target_dt: Optional[datetime]) -> Optional[str]:
     if not isinstance(time_hint, dict):
         return None

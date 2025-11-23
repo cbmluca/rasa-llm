@@ -24,13 +24,17 @@ _NEWS_TRIGGERS = [
 LANGUAGE_MARKERS = ("english", "engelsk")
 
 
+    # WHAT: check if the lowered utterance references news-related keywords.
+    # WHY: avoids running the news parser when the prompt clearly isn’t about news.
+    # HOW: reuse `contains_keyword` against `NEWS_KEYWORDS`.
 def matches(lowered: str) -> bool:
-    """Guard to skip parsing when no news keywords are present."""
     return contains_keyword(lowered, NEWS_KEYWORDS)
 
 
+    # WHAT: extract topic and language hints for the news tool.
+    # WHY: deterministic parsing lets Tier‑1 skip the router when prompts explicitly ask for news.
+    # HOW: strip language markers, infer the topic after triggers, and return a `CommandResult`.
 def parse(message: str) -> Optional[CommandResult]:
-    """Extract news topic/language hints for the news tool."""
     payload: Dict[str, object] = {"message": message, "domain": "news"}
     cleaned_message, language = _strip_language_markers(message)
     if language:
@@ -41,8 +45,10 @@ def parse(message: str) -> Optional[CommandResult]:
     return CommandResult(tool="news", payload=payload, confidence=0.85)
 
 
+    # WHAT: detect manual language hints (“english news”) and remove them from the topic string.
+    # WHY: the news tool can switch sources/languages but needs a clean topic.
+    # HOW: search for known markers, strip them via regex, and return both the cleaned text and the inferred language code.
 def _strip_language_markers(message: str) -> tuple[str, Optional[str]]:
-    """Remove language hints ("english", "engelsk") and return ISO code."""
     lowered = message.lower()
     language: Optional[str] = None
     cleaned = message
@@ -54,8 +60,10 @@ def _strip_language_markers(message: str) -> tuple[str, Optional[str]]:
     return cleaned.strip(), language
 
 
+    # WHAT: derive the news topic from the free-form prompt.
+    # WHY: router/NLU often receives “news about electric vehicles” and we only need the topic portion.
+    # HOW: look for `NEWS_TRIGGERS`, trim punctuation/clauses, and fallback to the raw message when no trigger exists.
 def _extract_news_topic(message: str) -> str:
-    """Heuristically pull the topic requested after "news/headlines" keywords."""
     lowered = message.lower()
     for trigger in _NEWS_TRIGGERS:
         idx = lowered.find(trigger)
@@ -73,8 +81,10 @@ def _extract_news_topic(message: str) -> str:
     return cleaned
 
 
+    # WHAT: shorten the extracted topic by removing trailing punctuation or conjunctions.
+    # WHY: keeps the query string concise for NewsAPI/RSS searches.
+    # HOW: split on punctuation/connectors and trim whitespace.
 def _truncate_topic(topic: str) -> str:
-    """Trim trailing clauses so the topic stays concise."""
     for delimiter in ["?", "!", ".", ",", " and "]:
         parts = topic.split(delimiter, 1)
         if len(parts) > 1:

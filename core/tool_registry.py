@@ -21,23 +21,26 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, ToolFn] = {}
 
-# --- Registration: fail fast on duplicates to avoid shadowing tools
+    # WHAT: register a tool callable under a unique name.
+    # WHY: the orchestrator and router rely on this registry to know which tools are safe to invoke.
+    # HOW: guard against duplicates and store the callable in `_tools`.
     def register_tool(self, name: str, fn: ToolFn) -> None:
-        """WHAT: add a tool, WHY: prevent duplicates, HOW: store callable."""
         if name in self._tools:
             raise ValueError(f"Tool '{name}' is already registered")
         self._tools[name] = fn
 
-# --- Execution: guard against missing tools so callers receive clear errors
+    # WHAT: execute a previously registered tool.
+    # WHY: the orchestrator calls this when a deterministic flow resolves to a tool.
+    # HOW: look up the callable and invoke it with the provided payload/dry_run flag.
     def run_tool(self, name: str, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
-        """WHAT: execute registered tool, WHY: orchestrator entry point, HOW: lookup and invoke."""
         try:
             tool_fn = self._tools[name]
         except KeyError as exc:
             raise KeyError(f"Tool '{name}' is not registered") from exc
         return tool_fn(payload, dry_run=dry_run)
 
-# --- Snapshot: provide a copy to avoid external mutation of registry state
+    # WHAT: return a snapshot of registered tools.
+    # WHY: the router uses this to build prompts and the CLI may list available tools.
+    # HOW: return a shallow copy of the registry dict to prevent callers from mutating internal state.
     def available_tools(self) -> Dict[str, ToolFn]:
-        """WHAT: expose registry snapshot, WHY: router prompt + introspection, HOW: return copy."""
         return dict(self._tools)

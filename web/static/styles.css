@@ -1,3 +1,8 @@
+/*
+ * WHAT: Base typography and color tokens for the Tier-5 dark theme.
+ * WHY: Keeps panels/buttons consistent and lets us tweak palettes by editing shared vars.
+ * HOW: Declare fonts and CSS custom properties on :root/body, then reuse them across components.
+ */
 :root {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   line-height: 1.4;
@@ -10,6 +15,11 @@
   --ghost: rgba(255, 255, 255, 0.12);
 }
 
+/*
+ * WHAT: Global reset to ensure predictable box sizing and full-viewport gradients.
+ * WHY: The dashboard mixes complex grids and flex layouts; consistent baselines avoid layout drift.
+ * HOW: Apply border-box sizing, zero margins, and a gradient background on the body.
+ */
 * {
   box-sizing: border-box;
 }
@@ -21,6 +31,11 @@ body {
   min-height: 100vh;
 }
 
+/*
+ * WHAT: High-level layout scaffolding (page wrapper, header, nav buttons).
+ * WHY: Aligns the title/actions bar and top navigation across wide/compact viewports.
+ * HOW: Max-width page container with flex headers and pill-style nav links toggled by JS.
+ */
 .page {
   max-width: 1600px;
   margin: 0 auto;
@@ -40,10 +55,102 @@ body {
   font-size: 2.25rem;
 }
 
+.hint {
+  color: #8da2c4;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
 .header-actions {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+}
+
+.reviewer-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  min-width: 170px;
+}
+
+.reviewer-chip-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reviewer-chip .badge {
+  margin: 0;
+}
+
+.meta-text {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  margin: 4px 0;
+}
+
+.warning {
+  color: #fbbf24;
+}
+
+.governance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.governance-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.governance-card.warning {
+  border-color: #fbbf24;
+}
+
+.list.compact {
+  max-height: none;
+  gap: 4px;
+}
+
+.notification-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notification-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.notification-reason {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.notification-command {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  margin: 0;
+  color: #d1d5db;
+}
+
+.notification-empty {
+  color: #94a3b8;
+  font-style: italic;
 }
 
 .button {
@@ -77,6 +184,11 @@ body {
   cursor: not-allowed;
 }
 
+/*
+ * WHAT: Stats card grid styling for the training view summary metrics.
+ * WHY: Presents queue counts and classifier warnings as glanceable cards.
+ * HOW: Responsive CSS grid with panel-like styling and muted hint text.
+ */
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -177,6 +289,11 @@ body {
   color: #c6cad6;
 }
 
+/*
+ * WHAT: Shared panel styles for every card/table section.
+ * WHY: Ensures consistent borders, shadows, and spacing no matter which panel renders inside a view.
+ * HOW: Rounded containers with dark backgrounds, subtle borders, and drop shadows.
+ */
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -185,6 +302,11 @@ body {
   box-shadow: 0 20px 50px rgba(15, 23, 42, 0.4);
 }
 
+/*
+ * WHAT: Layout + visuals for the pending queue column and controls.
+ * WHY: Reviewers need a roomy list with pagination plus context pills for each pending intent.
+ * HOW: Grid container that houses a bordered column, toolbar, pagination controls, and list items.
+ */
 .self-learning-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -224,6 +346,9 @@ body {
   color: #c6cad6;
 }
 
+/* WHAT: Style the pending intent list and cards.
+   WHY: Highlight active selections and metadata so reviewers can quickly scan the queue.
+   HOW: Flex column list with pill-like cards that change border/background on hover/editing. */
 .pending-list {
   list-style: none;
   padding: 0;
@@ -329,6 +454,11 @@ body {
   margin-top: 12px;
 }
 
+/*
+ * WHAT: Styling for the correction editor column.
+ * WHY: Separates editable payload fields and actions from the pending queue visually.
+ * HOW: Bordered, shadowed container with grid-based form controls and disabled-state buttons.
+ */
 .correction-column {
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -371,6 +501,11 @@ body {
   padding: 10px;
 }
 
+/*
+ * WHAT: Shared styling for related prompts + intended entities pickers.
+ * WHY: Chips and autocomplete dropdowns must feel cohesive while reviewers stitch context together.
+ * HOW: Bordered rows with headers, inline picker inputs, suggestion dropdowns, and removable chips.
+ */
 .related-prompts-row {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 12px;
@@ -493,6 +628,11 @@ body {
   display: none !important;
 }
 
+/*
+ * WHAT: Responsive grid for dynamic field renderers (todo/calendar/kitchen/app guide).
+ * WHY: Payload fields change per tool; this grid keeps forms balanced on large and small screens.
+ * HOW: CSS grid with auto-fit columns, full-width overrides for content fields, and textarea tweaks.
+ */
 .field-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
@@ -692,9 +832,15 @@ body {
   margin-bottom: 12px;
 }
 
+/*
+ * WHAT: Table styles shared by classifier logs, corrected pairs, and data stores.
+ * WHY: Provide clear dividers and compact spacing so dense data stays readable.
+ * HOW: Border-collapse tables with subtle row separators and tighter padding variants.
+ */
 .data-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .data-table th,
@@ -702,6 +848,14 @@ body {
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
   padding: 8px 6px;
   text-align: left;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.data-table td pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .data-table tbody tr:last-child td {
@@ -712,6 +866,27 @@ body {
 .data-table.tight td {
   font-size: 0.9rem;
   padding: 6px 4px;
+}
+
+#corrected-table thead th:nth-child(1),
+#corrected-table tbody td:nth-child(1) {
+  width: 24%;
+  white-space: normal;
+  word-break: normal;
+}
+
+#corrected-table thead th:nth-child(2),
+#corrected-table tbody td:nth-child(2),
+#corrected-table thead th:nth-child(3),
+#corrected-table tbody td:nth-child(3) {
+  width: 35%;
+}
+
+#corrected-table thead th:nth-child(4),
+#corrected-table tbody td:nth-child(4) {
+  width: 6%;
+  text-align: right;
+  display: table-cell;
 }
 
 .pending-actions {
@@ -748,6 +923,11 @@ body {
   min-width: 140px;
 }
 
+/*
+ * WHAT: Import/export utility styling for bulk label workflows.
+ * WHY: Keep upload inputs and export link rows tidy next to their action buttons.
+ * HOW: Flex rows with dashed drop areas, pill controls, and inline download anchors.
+ */
 .export-row {
   margin-top: 16px;
   display: flex;
@@ -800,6 +980,11 @@ body {
   gap: 12px;
 }
 
+/*
+ * WHAT: Inline forms + list styling for data store CRUD (todos, kitchen tips, guide, etc.).
+ * WHY: Provide lightweight editors beneath each list without overwhelming the panel.
+ * HOW: Column flex forms with rounded inputs plus scrollable list containers sharing the palette.
+ */
 .inline-form {
   display: flex;
   flex-direction: column;
@@ -833,6 +1018,11 @@ body {
   font-size: 0.9rem;
 }
 
+/*
+ * WHAT: Toast notification container for async API feedback.
+ * WHY: Import/export and correction actions need transient status messages without modal dialogs.
+ * HOW: Fixed-position panel that animates opacity/position when toggled via the `hidden` class.
+ */
 .toast {
   position: fixed;
   bottom: 24px;
@@ -851,6 +1041,11 @@ body {
   transform: translateY(10px);
 }
 
+/*
+ * WHAT: Responsive adjustments for tablets/phones.
+ * WHY: Reviewers may run Tier-5 in smaller windows; key grids must stack cleanly.
+ * HOW: Media queries collapse multi-column grids, adjust padding, and relax control layouts.
+ */
 @media (max-width: 1024px) {
   .main-grid {
     grid-template-columns: 1fr;
@@ -891,6 +1086,11 @@ body {
     justify-content: flex-end;
   }
 }
+/*
+ * WHAT: Specialized calendar layout overrides for the dynamic field grid.
+ * WHY: Calendar payloads require many short fields (dates/times/locations) arranged predictably.
+ * HOW: Assign fixed grid columns/rows to each field wrapper when the calendar layout class is set.
+ */
 #dynamic-field-grid.calendar-layout {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -15,10 +16,12 @@ except Exception:  # pragma: no cover - PyYAML optional
 
 from app.main import build_orchestrator
 from app.prompt_templates import generate_prompts, PromptTemplate
+from core.governance import GovernancePolicy
 
 REPORT_PATH = Path("reports/eval_results.json")
 STATE_PATH = Path("reports/eval_state.json")
 DEFAULT_LABELED_PATH = Path("data_pipeline/nlu_training_bucket/labeled_prompts.jsonl")
+DEFAULT_GOVERNANCE_PATH = Path("config/governance.yml")
 
 
 @dataclass
@@ -122,6 +125,12 @@ def main() -> None:
         default=0,
         help="Only run when new labeled prompts since last run >= threshold",
     )
+    parser.add_argument(
+        "--governance-config",
+        type=Path,
+        default=DEFAULT_GOVERNANCE_PATH,
+        help="Path to governance.yml for embedding policy metadata into the report.",
+    )
     args = parser.parse_args()
 
     cases = load_cases(args.config)
@@ -147,6 +156,16 @@ def main() -> None:
 
     orchestrator = build_orchestrator()
     results = evaluate_cases(orchestrator, cases)
+    policy_metadata = None
+    if args.governance_config and args.governance_config.exists():
+        policy = GovernancePolicy(args.governance_config)
+        policy_metadata = {
+            "version": policy.policy_version,
+            "allowed_tools": list(policy.allowed_tools),
+            "allowed_models": list(policy.allowed_models),
+        }
+    results["policy"] = policy_metadata
+    results["generated_at"] = datetime.now(tz=timezone.utc).isoformat()  # need datetime import?
 
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(results, indent=2), encoding="utf-8")

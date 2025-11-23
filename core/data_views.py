@@ -15,7 +15,13 @@ from core.text_utils import hash_text, normalize_text
 
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
-    """WHAT: stream JSONL rows, WHY: avoid loading entire files, HOW: tolerant parse."""
+    """WHAT: stream newline-delimited JSON without loading whole files.
+
+    WHY: queue/correction files grow quickly; iterating lazily avoids memory
+    spikes and lets callers short-circuit early.
+    HOW: open the path if it exists, skip blank lines, and yield decoded rows
+    while swallowing parse errors to avoid blocking batch jobs.
+    """
 
     if not path.exists():
         return
@@ -31,12 +37,22 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
 
 
 def iter_pending_prompts(path: Path) -> Iterator[dict]:
-    """Alias iter_jsonl for clarity when iterating pending queue files."""
+    """WHAT: semantic alias for ``iter_jsonl`` dedicated to pending files.
+
+    WHY: clarifies call sites so it’s obvious which queues are being read.
+    HOW: delegate directly to ``iter_jsonl``.
+    """
     return iter_jsonl(path)
 
 
 def review_pending_prompts(path: Path, limit: int = 10, page: int = 1) -> list[dict]:
-    """Load a page of pending prompts newest-first for reporting/export."""
+    """WHAT: paginate pending entries newest-first for dashboards/exports.
+
+    WHY: both the API and CLI review scripts need consistent pagination logic
+    so the same slice of prompts appears everywhere.
+    HOW: load all rows once, compute the reversed window for the requested
+    page, and return the subset (or empty list when the bounds miss).
+    """
     entries = list(iter_pending_prompts(path))
     total = len(entries)
     if total == 0 or limit <= 0:
@@ -66,7 +82,13 @@ def export_pending(
     fmt: str,
     dedupe: bool,
 ) -> dict:
-    """Export pending prompts grouped by intent as CSV/JSON for audits."""
+    """WHAT: dump pending prompts grouped by intent into CSV/JSON snapshots.
+
+    WHY: analysts capture audit samples or share queue slices without exposing
+    the live JSONL files directly.
+    HOW: iterate pending rows, hash + dedupe if requested, group by intent,
+    serialize to the requested format per intent, and return counts + paths.
+    """
     groups: Dict[str, List[dict]] = {}
     seen_hashes: set[str] = set()
     for entry in iter_pending_prompts(pending_path):
@@ -110,7 +132,13 @@ def export_pending(
 
 
 def load_label_rows(path: Path, fmt: str) -> list[dict]:
-    """Parse labeled data files regardless of csv/json format."""
+    """WHAT: parse uploaded label files independent of csv/json encoding.
+
+    WHY: bulk imports support spreadsheets or JSON exports; normalizing them
+    into dict lists keeps downstream logic simple.
+    HOW: branch on ``fmt``, relying on ``csv.DictReader`` for CSV and ``json``
+    for everything else, erroring when structures aren’t lists.
+    """
     if fmt == "csv":
         with path.open("r", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
@@ -123,7 +151,13 @@ def load_label_rows(path: Path, fmt: str) -> list[dict]:
 
 
 def normalize_intended_entities(values: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Deduplicate/prettify intended entity annotations before persistence."""
+    """WHAT: sanitize reviewer-provided intended entity chips.
+
+    WHY: chips flow between UI and backend; enforcing consistent ``title``/``id``
+    keys avoids schema drift and eases training exports.
+    HOW: walk entries, coerce to dicts, drop empties, and rebuild a clean list
+    with trimmed title/id pairs.
+    """
 
     normalized: List[Dict[str, Any]] = []
     if not values:
@@ -143,7 +177,13 @@ def normalize_intended_entities(values: Optional[Sequence[Dict[str, Any]]]) -> L
 
 
 def load_label_lookup(path: Path) -> Dict[str, Dict[str, Optional[str]]]:
-    """Build hash->label mappings to dedupe classifier review entries."""
+    """WHAT: build hash -> reviewer metadata lookup for dedupe.
+
+    WHY: classifier review + append helpers must know which prompts were
+    already labeled to prevent duplicate rows.
+    HOW: iterate JSONL rows, compute text hash, and store reviewer intent/action
+    per hash for O(1) checks later.
+    """
     lookup: Dict[str, Dict[str, Optional[str]]] = {}
     for record in iter_jsonl(path):
         text = record.get("text")
@@ -164,7 +204,13 @@ def append_labels(
     labeled_path: Path,
     dedupe: bool,
 ) -> dict:
-    """Append reviewer labels from imported CSV/JSON files."""
+    """WHAT: merge uploaded labels into the canonical labeled JSONL file.
+
+    WHY: imports from spreadsheets should behave like manual corrections,
+    validating intents/actions and deduping by text hash.
+    HOW: load incoming rows, validate against ``intent_config``, normalize
+    reviewer actions, skip duplicates when requested, and append JSON lines.
+    """
     rows = load_label_rows(input_path, fmt)
     config = load_intent_config()
     known_intents = set(config.names())
@@ -215,7 +261,13 @@ def append_label_entry(
     dedupe: bool = True,
     reviewer_action: Optional[str] = None,
 ) -> dict:
-    """Append a single labeled prompt entry (used by automated scripts)."""
+    """WHAT: record an individual label from scripts/tests.
+
+    WHY: automated evaluations or migrations occasionally produce single labels
+    that should share the same dedupe/validation path as bulk imports.
+    HOW: validate intents, normalize actions, hash the text to skip duplicates,
+    and append a JSONL row when new.
+    """
     text_value = (text or "").strip()
     if not text_value:
         raise ValueError("Text is required for labeling.")
@@ -261,8 +313,15 @@ def append_correction_entry(
     predicted_payload: Optional[Dict[str, Any]] = None,
     corrected_payload: Optional[Dict[str, Any]] = None,
     updated_stores: Optional[List[str]] = None,
+    reviewer_id: Optional[str] = None,
 ) -> dict:
-    """Persist a reviewer correction with versioned history."""
+    """WHAT: persist reviewer corrections in ``corrected_prompts.jsonl``.
+
+    WHY: Tier‑5 corrections power training data and need full predicted vs
+    corrected payloads plus store update metadata.
+    HOW: normalize parser payloads, copy intents/actions if missing, compute
+    deterministic ids/version numbers, and append the versioned JSON row.
+    """
     identifier = (prompt_id or "").strip() or hash_text(prompt_text or "")
     if not identifier:
         identifier = uuid4().hex
@@ -308,6 +367,7 @@ def append_correction_entry(
         "corrected_payload": normalized_corrected,
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "updated_stores": list(updated_stores or []),
+        "reviewer_id": reviewer_id,
     }
     corrected_path.parent.mkdir(parents=True, exist_ok=True)
     with corrected_path.open("a", encoding="utf-8") as handle:
@@ -321,7 +381,13 @@ def rehydrate_labeled_prompts(
     labeled_path: Path,
     pending_path: Path,
 ) -> dict:
-    """Move legacy labeled prompts back into the pending queue."""
+    """WHAT: migrate legacy labeled prompts into the new pending queue.
+
+    WHY: earlier tiers stored partially-labeled data elsewhere; this routine
+    ensures nothing is lost when adopting the current queue system.
+    HOW: iterate historic rows, skip duplicates via hashes, rebuild minimal
+    pending payloads, append them, and clear the legacy file once migrated.
+    """
     if not labeled_path.exists():
         return {"migrated": 0}
     legacy_entries = list(iter_jsonl(labeled_path))
@@ -373,7 +439,13 @@ def rehydrate_labeled_prompts(
 
 
 def delete_pending_entry(pending_path: Path, prompt_id: str) -> bool:
-    """Remove a pending intent by id or text hash."""
+    """WHAT: remove a pending record by id or hashed text.
+
+    WHY: reviewers and correction flows need to drop completed/invalid prompts
+    without editing JSON files manually.
+    HOW: load all rows, skip the matching entry, rewrite the JSONL, and return
+    whether anything was removed.
+    """
     if not prompt_id or not pending_path.exists():
         return False
     prompt_key = prompt_id.strip().lower()
@@ -402,7 +474,13 @@ def delete_pending_entry(pending_path: Path, prompt_id: str) -> bool:
 
 
 def get_pending_entry(pending_path: Path, prompt_id: str) -> Optional[dict]:
-    """Return the pending record matching ``prompt_id`` or its text hash."""
+    """WHAT: fetch a pending row using the queue id or hashed text.
+
+    WHY: correction flows need the stored metadata (conversation ids, extras)
+    before finalizing labels or updating conversation memory.
+    HOW: iterate pending rows, compute hashes, and return the matching entry if
+    one exists.
+    """
     if not prompt_id or not pending_path.exists():
         return None
     prompt_key = prompt_id.strip().lower()
@@ -415,6 +493,13 @@ def get_pending_entry(pending_path: Path, prompt_id: str) -> Optional[dict]:
 
 
 def dedupe_pending_prompts(pending_path: Path) -> dict:
+    """WHAT: drop duplicate pending rows using text hashes.
+
+    WHY: migrations and chat retries can produce identical prompts; deduping
+    keeps queue counts accurate and prevents double review.
+    HOW: track seen hashes while iterating, keep the first instance, rewrite
+    the JSONL when duplicates were removed, and report counts.
+    """
     if not pending_path.exists():
         return {"deduped": 0}
     rows = list(iter_jsonl(pending_path))
@@ -454,7 +539,15 @@ def append_pending_prompt(
     conversation_entry_id: Optional[str] = None,
     field_versions: Optional[Dict[str, str]] = None,
     intended_entities: Optional[Sequence[Dict[str, Any]]] = None,
+    reviewer_id: Optional[str] = None,
 ) -> dict:
+    """WHAT: append a structured pending record for reviewer triage.
+
+    WHY: every orchestrated turn that needs human review should land here so
+    Tier‑5 tools can enrich, dedupe, and eventually correct it.
+    HOW: normalize payloads/entities/versions, hash the text for dedupe,
+    persist related prompts + extras, and append to the JSONL file.
+    """
     text_value = (message or "").strip()
     if not text_value:
         return {"appended": False, "skipped": True}
@@ -507,6 +600,7 @@ def append_pending_prompt(
         "conversation_entry_id": conversation_entry_id,
         "field_versions": normalized_versions,
         "intended_entities": normalize_intended_entities(intended_entities),
+        "reviewer_id": reviewer_id,
     }
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     with pending_path.open("a", encoding="utf-8") as handle:
@@ -522,7 +616,13 @@ def review_classifier_predictions(
     intent: Optional[str],
     limit: int,
 ) -> List[dict]:
-    """Surface classifier turns that were overridden or failed."""
+    """WHAT: surface classifier turns worth reviewing (mismatches/failures).
+
+    WHY: Tier‑2 monitoring highlights low-confidence intents and tool failures
+    triggered by classifier routing so humans can relabel them.
+    HOW: iterate the turn log, filter entries tagged with classifier metadata,
+    compare with reviewer labels, and stop once ``limit`` findings exist.
+    """
     findings: List[dict] = []
     label_lookup = load_label_lookup(labeled_path) if labeled_path.exists() else {}
 
@@ -568,7 +668,13 @@ def list_recent_records(
     reverse: bool = True,
     predicate: Optional[Callable[[dict], bool]] = None,
 ) -> List[dict]:
-    """Read the last N JSONL rows with optional filtering."""
+    """WHAT: return the most recent JSONL entries with optional filtering.
+
+    WHY: stats endpoints and dashboards often need the tail of a file without
+    reading unrelated rows.
+    HOW: load rows via ``iter_jsonl``, optionally filter with a predicate, and
+    slice forward/backward depending on ``reverse``.
+    """
     rows = list(iter_jsonl(path))
     if predicate:
         rows = [row for row in rows if predicate(row)]
@@ -580,7 +686,13 @@ def list_recent_records(
 
 
 def load_labeled_prompts(path: Path, *, limit: int, intent: Optional[str] = None) -> List[dict]:
-    """Return recent labeled entries for the Training view."""
+    """WHAT: fetch labeled samples for the Training tab.
+
+    WHY: the UI lists reviewer submissions per intent so trainers can inspect
+    class balance and export examples quickly.
+    HOW: reuse ``list_recent_records`` with an intent predicate that checks
+    parser or reviewer intent fields.
+    """
     def _predicate(record: dict) -> bool:
         if not intent:
             return True
@@ -591,7 +703,12 @@ def load_labeled_prompts(path: Path, *, limit: int, intent: Optional[str] = None
 
 
 def summarize_pending_queue(path: Path) -> dict:
-    """Compute total pending prompts and a per-intent breakdown."""
+    """WHAT: compute pending totals + per-intent breakdown.
+
+    WHY: high-level stats power dashboard cards and alerts when specific
+    intents pile up.
+    HOW: iterate pending rows once, increment totals, and return both counts.
+    """
     total = 0
     by_intent: Dict[str, int] = {}
     for record in iter_pending_prompts(path):
@@ -602,7 +719,13 @@ def summarize_pending_queue(path: Path) -> dict:
 
 
 def list_pending_with_hashes(path: Path, *, limit: int, page: int = 1) -> List[dict]:
-    """Paginate pending entries while ensuring they have prompt ids + hashes."""
+    """WHAT: paginate pending rows and guarantee hash/id metadata exists.
+
+    WHY: the UI assumes each row has stable identifiers for dedupe + actions;
+    backfilling them here keeps legacy entries usable.
+    HOW: reuse ``review_pending_prompts``, compute hashes/ids when missing,
+    normalize parser payloads/entities, and return the enriched list.
+    """
     rows = review_pending_prompts(path, limit, page)
     enriched: List[dict] = []
     for row in rows:
@@ -629,6 +752,11 @@ def list_pending_with_hashes(path: Path, *, limit: int, page: int = 1) -> List[d
 
 
 def list_recent_pending(path: Path, *, limit: int) -> List[dict]:
+    """WHAT: convenience wrapper for the first page of pending entries.
+
+    WHY: stats cards only need the most recent slice without pagination math.
+    HOW: call ``list_pending_with_hashes`` with page=1.
+    """
     return list_pending_with_hashes(path, limit=limit, page=1)
 
 
@@ -639,7 +767,13 @@ def load_corrected_prompts(
     page: int = 1,
     intent: Optional[str] = None,
 ) -> dict:
-    """Paginate corrected prompts for the Labeled Prompt Pairs table."""
+    """WHAT: paginate corrected prompt history for the reviewer dashboard.
+
+    WHY: Tier‑5 lists corrected pairs chronologically with optional intent
+    filters to audit training data.
+    HOW: load all rows, filter by intent/tool if requested, sort by timestamp,
+    and slice by limit/page while returning count metadata.
+    """
     records = list(iter_jsonl(path))
     if intent:
         records = [
@@ -662,7 +796,11 @@ def load_corrected_prompts(
 
 
 def count_jsonl_rows(path: Path) -> int:
-    """Return number of rows in a JSONL file (used for stats cards)."""
+    """WHAT: count JSONL rows for stats reporting.
+
+    WHY: stats cards show the number of corrected prompts; counting rows on
+    demand avoids adding extra metadata files.
+    HOW: sum over ``iter_jsonl`` results."""
     return sum(1 for _ in iter_jsonl(path))
 
 

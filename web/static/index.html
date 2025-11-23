@@ -8,21 +8,59 @@
   </head>
   <body>
     <div class="page">
+      <!--
+        WHAT: Page title + action buttons for refreshing data or opening exports.
+        WHY: Reviewers frequently reload queues and download CSV/JSON snapshots during triage.
+        HOW: Flex container with heading on the left and refresh/export controls on the right.
+      -->
       <header class="page-header">
         <div>
           <h1>Taskmaster</h1>
         </div>
         <div class="header-actions">
+          <div class="reviewer-chip">
+            <span class="hint">Reviewer</span>
+            <div class="reviewer-chip-controls">
+              <span class="badge" id="reviewer-id-badge">anonymous</span>
+              <button id="set-reviewer-id" class="button ghost" type="button">Change</button>
+            </div>
+          </div>
           <button id="refresh-button" class="button secondary">Refresh Data</button>
           <a class="button ghost" href="/exports" target="_blank" rel="noreferrer">Open Exports</a>
         </div>
       </header>
+      <!--
+        WHAT: Top-level navigation between the chat/data workspace and training logs.
+        WHY: Keeps the two reviewer workflows (live monitoring vs. labeling) one click apart.
+        HOW: Button-styled tabs with `data-target` attributes that app.js uses to swap views.
+      -->
       <nav class="top-nav">
         <button class="nav-link active" data-target="front-page">Chat &amp; Data</button>
         <button class="nav-link" data-target="training-page">Training Logs</button>
+        <button class="nav-link" data-target="governance-page">Governance</button>
       </nav>
 
+      <!--
+        WHAT: Front-page workspace that combines chat, correction queue, and live data stores.
+        WHY: Tier-5 reviewers need to converse with the bot, fix parser payloads, and spot-check stores in one screen.
+        HOW: Panels stacked vertically (chat, self-learning editor, data stores) within the active page-view.
+      -->
       <div class="page-view active" id="front-page">
+        <section class="panel" id="notifications-panel">
+          <div class="panel-header">
+            <div>
+              <h2>CLI Notifications</h2>
+            </div>
+          </div>
+          <ul class="notification-list" id="notifications-list">
+            <li class="notification-empty">No pending CLI actions.</li>
+          </ul>
+        </section>
+        <!--
+          WHAT: Chat console wired to `/api/chat` for orchestrator validation.
+          WHY: Lets reviewers reproduce issues and seed pending prompts without leaving the dashboard.
+          HOW: Log container plus form whose submission is handled by app.js to stream responses.
+        -->
         <section class="panel" id="chat-panel">
           <div class="panel-header">
             <div>
@@ -37,6 +75,11 @@
           </form>
         </section>
 
+        <!--
+          WHAT: Self-learning dashboard showing pending intents, correction editor, and latest triggered payload.
+          WHY: Centralizes the reviewer queue with paging controls, related prompts, and correction submission flow.
+          HOW: Pending column lists queue records while a dynamic editor + confirmation card sit alongside.
+        -->
         <section class="panel" id="self-learning-panel">
           <div class="panel-header">
             <div>
@@ -111,6 +154,11 @@
           </div>
         </section>
 
+        <!--
+          WHAT: Live data store viewer/editor for todos, calendar, kitchen tips, and app guide.
+          WHY: Reviewers verify CRUD outcomes or manually patch JSON stores without CLI access.
+          HOW: Tabs switch between tool-backed tables/forms whose submit events call the API.
+        -->
         <section class="panel" id="data-panel">
           <div class="panel-header">
             <div>
@@ -186,7 +234,17 @@
         </section>
       </div>
 
+      <!--
+        WHAT: Training/logging view that surfaces stats, classifier findings, corrected pairs, and import/export tools.
+        WHY: Analysts need at-a-glance health metrics plus utilities to move labeled data in and out of Tier-5.
+        HOW: Separate page-view containing stacked panels for cards, tables, and forms all powered by app.js fetches.
+      -->
       <div class="page-view" id="training-page">
+        <!--
+          WHAT: Summary stat cards for pending counts, labeled prompts, and classifier warnings.
+          WHY: Provides a snapshot of queue pressure and labeling throughput before diving into tables.
+          HOW: Simple grid whose values are hydrated via `/api/stats`.
+        -->
         <section class="stats" id="stats-cards">
           <div class="stat-card">
             <p class="label">Pending Intents</p>
@@ -205,6 +263,11 @@
           </div>
         </section>
 
+        <!--
+          WHAT: Classifier review table fed by `/api/logs/classifier`.
+          WHY: Highlights low-confidence or mismatched intents so reviewers can relabel or retrain quickly.
+          HOW: Data table with refresh button; rows are populated client-side with fetched JSON.
+        -->
         <section class="panel training-panel" id="classifier-panel">
           <div class="panel-header">
             <div>
@@ -227,6 +290,11 @@
           </table>
         </section>
 
+        <!--
+          WHAT: Labeled prompt pairs table sourced from `/api/logs/corrected`.
+          WHY: Shows predicted vs corrected payloads plus delete actions for audit/backfill work.
+          HOW: Structured table refreshed on demand; app.js renders two columns of JSON summaries per row.
+        -->
         <section class="panel training-panel" id="corrected-panel">
           <div class="panel-header">
             <div>
@@ -249,6 +317,11 @@
           </table>
         </section>
 
+        <!--
+          WHAT: Import form for reviewer-provided CSV/JSON label files.
+          WHY: Supports bulk labeling workflows that originate in spreadsheets or offline tools.
+          HOW: File input + format selector POSTed to `/api/logs/import` via FormData.
+        -->
         <section class="panel training-panel" id="import-panel">
           <div class="panel-header">
             <div>
@@ -266,6 +339,11 @@
             </div>
           </form>
         </section>
+        <!--
+          WHAT: Export control for dumping pending prompts to CSV/JSON.
+          WHY: Analysts periodically snapshot the queue for audits or model fine-tuning.
+          HOW: Button calls `/api/logs/export`; returned file links render inside `#export-links`.
+        -->
         <section class="panel training-panel" id="export-panel">
           <div class="panel-header">
             <div>
@@ -278,7 +356,83 @@
           </div>
         </section>
       </div>
+
+      <div class="page-view" id="governance-page">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Governance Overview</h2>
+            </div>
+          </div>
+          <div class="governance-grid">
+            <div class="governance-card">
+              <p class="hint">Policy Version</p>
+              <h3 id="governance-policy-version">—</h3>
+              <p class="hint">Allowed Tools</p>
+              <p class="meta-text" id="governance-allowed-tools">—</p>
+              <p class="hint">Allowed Models</p>
+              <p class="meta-text" id="governance-allowed-models">—</p>
+              <p class="hint">Last Purge</p>
+              <p class="meta-text" id="governance-last-purge">—</p>
+            </div>
+            <div class="governance-card">
+              <p class="hint">Average Latency</p>
+              <h3 id="governance-avg-latency">—</h3>
+              <p class="hint">Policy Violations</p>
+              <h3 id="governance-violation-count">0</h3>
+              <ul class="list compact" id="governance-violation-list"></ul>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Retention Rules</h2>
+            </div>
+          </div>
+          <table class="data-table tight">
+            <thead>
+              <tr>
+                <th>Bucket</th>
+                <th>Max Entries</th>
+              </tr>
+            </thead>
+            <tbody id="retention-table-body"></tbody>
+          </table>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Intent &amp; Eval Metrics</h2>
+            </div>
+          </div>
+          <div class="governance-grid">
+            <div class="governance-card">
+              <p class="hint">Daily Intent Counts</p>
+              <table class="data-table tight">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Counts</th>
+                  </tr>
+                </thead>
+                <tbody id="governance-intent-counts"></tbody>
+              </table>
+            </div>
+            <div class="governance-card">
+              <p class="hint">Evaluation Accuracy</p>
+              <p class="meta-text" id="governance-eval-intent">Intent: —</p>
+              <p class="meta-text" id="governance-eval-action">Action: —</p>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
+    <!--
+      WHAT: Toast container for success/error notifications.
+      WHY: Async actions (imports, tool runs) need lightweight status feedback without blocking the UI.
+      HOW: Hidden div toggled by app.js with text + animated opacity transitions.
+    -->
     <div id="toast" class="toast hidden"></div>
     <script type="module" src="/static/app.js"></script>
   </body>

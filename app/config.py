@@ -35,6 +35,8 @@ _DEFAULT_CLASSIFIER_MIN_SCORE = 0.55
 _DEFAULT_WEB_UI_ENABLED: bool = True
 _DEFAULT_WEB_UI_HOST = "127.0.0.1"
 _DEFAULT_WEB_UI_PORT = 9000
+_DEFAULT_GOVERNANCE_PATH = "config/governance.yml"
+_DEFAULT_REVIEWER_ID = "anonymous"
 
 # ---------------------------------------------------------------------------
 # Accessors for static defaults
@@ -231,3 +233,18 @@ def get_web_ui_port(env: Dict[str, str] | None = None) -> int:
     except ValueError:
         return _DEFAULT_WEB_UI_PORT
     return value if 0 < value <= 65535 else _DEFAULT_WEB_UI_PORT
+
+
+def get_governance_path(env: Dict[str, str] | None = None) -> Path:
+    """Return the path to the governance policy YAML file."""
+
+    source = env if env is not None else os.environ
+    override = source.get("GOVERNANCE_PATH")
+    return Path(override) if override else Path(_DEFAULT_GOVERNANCE_PATH)
+
+
+def get_default_reviewer_id(env: Dict[str, str] | None = None) -> str:
+    """Return the fallback reviewer identifier for Tier-5 dashboards."""
+
+    source = env if env is not None else os.environ
+    return source.get("DEFAULT_REVIEWER_ID", _DEFAULT_REVIEWER_ID)

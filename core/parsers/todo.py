@@ -18,17 +18,10 @@ _COMPLETE_TODO_PATTERN = re.compile(r"\b(complete|finish)\b[^\n]*\b(todo|task)\b
 _MARK_DONE_PATTERN = re.compile(r"\bmark\b[^\n]+\bas\s+(?:done|complete|finished)\b", re.IGNORECASE)
 _COMPLETION_LEADING_PATTERN = re.compile(r"^\s*(?:to\s+)+", re.IGNORECASE)
 
-
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
-    """Turn conversational todo phrases into structured ``CommandResult``.
-
-    WHAT: detect list/find/create/update/delete intents, infer titles/notes,
-    and capture deadlines/status clues.
-    WHY: keeps Tier‑1 deterministic so todo requests never require the router
-    when clearly phrased.
-    HOW: run a series of regex helpers (``_is_find_request`` etc.), extract
-    quoted titles/notes, and fall back to classifiers when no patterns fire.
-    """
+    """WHAT: convert todo phrases into structured actions/entities for the todo tool.
+    WHY: deterministic parsing avoids hitting the router/LLM when user commands are explicit.
+    HOW: detect CRUD verbs via regex helpers, extract titles/notes/deadlines/status, and return a ``CommandResult``."""
     action = "create"
     completion_request = _is_completion_request(lowered)
     completion_title = _extract_completion_title(message)
@@ -107,9 +100,10 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
 
     return CommandResult(tool="todo_list", payload=payload)
 
-
 def _strip_command_directives(message: str) -> str:
-    """Remove directive keywords ("notes", "deadline", etc.) before parsing titles."""
+    """WHAT: trim trailing directive phrases before title extraction.
+    WHY: phrases like “add todo X notes Y” should stop title parsing before the notes segment.
+    HOW: scan for directive tokens and cut the string at the earliest occurrence."""
     lowered = message.lower()
     cut_index = len(message)
     for token in _TODO_DIRECTIVE_TOKENS:
@@ -118,35 +112,40 @@ def _strip_command_directives(message: str) -> str:
             cut_index = min(cut_index, idx)
     return message[:cut_index].strip()
 
-
 def _is_list_request(lowered: str) -> bool:
-    """Return True when the utterance asks to list/show todos."""
+    """WHAT: detect list/show phrasing for todos.
+    WHY: ensures the parser emits ``action=list`` so the tool enumerates items.
+    HOW: run list regexes and fall back to simple phrase checks."""
     if _LIST_TODOS_PATTERN.search(lowered) or _SIMPLE_LIST_PATTERN.search(lowered):
         return True
     return any(phrase in lowered for phrase in ("show my todos", "show todos", "view my todos", "what are my todos"))
 
-
 def _is_find_request(lowered: str) -> bool:
-    """Return True when the user asks to find/search for todos."""
+    """WHAT: detect search/find phrasing for todo keywords.
+    WHY: find requests should capture keywords instead of creating entries.
+    HOW: evaluate `_FIND_TODOS_PATTERN` against the lowered utterance."""
     return bool(_FIND_TODOS_PATTERN.search(lowered))
 
-
 def _is_delete_request(lowered: str) -> bool:
-    """Return True for delete/remove synonyms."""
+    """WHAT: detect delete/remove instructions.
+    WHY: maps “remove the task…” to the delete action for the tool.
+    HOW: check for key substrings like “delete todo” or “remove task”."""
     return any(keyword in lowered for keyword in ("delete todo", "remove todo", "delete task", "remove task"))
 
-
 def _is_completion_request(lowered: str) -> bool:
-    """Decide whether the user wants to mark a todo as completed."""
+    """WHAT: detect mark/finish/complete requests to set `status=completed`.
+    WHY: completed status updates should happen automatically when the intent is explicit.
+    HOW: test regex patterns and prefixes for completion verbs."""
     if _COMPLETE_TODO_PATTERN.search(lowered):
         return True
     if _MARK_DONE_PATTERN.search(lowered):
         return True
     return lowered.strip().startswith("complete ") or lowered.strip().startswith("finish ")
 
-
 def _extract_completion_title(message: str) -> Optional[str]:
-    """Pull the todo title from "complete X" phrasings."""
+    """WHAT: recover the todo title from completion phrases.
+    WHY: update actions need a concrete title when IDs aren’t supplied.
+    HOW: run regexes for “complete todo …”/“mark … as done”, strip quotes, and remove leading “to …” tokens."""
     patterns = [
         re.compile(r"(?:complete|finish)\s+(?:the\s+)?(?:task|todo)\s+(?:to\s+)?(.+)", re.IGNORECASE),
         re.compile(r"mark\s+(.+?)\s+as\s+(?:done|complete|finished)", re.IGNORECASE),
@@ -161,14 +160,16 @@ def _extract_completion_title(message: str) -> Optional[str]:
             return candidate
     return None
 
-
 def _strip_completion_leading(text: str) -> str:
-    """Normalize titles by removing leading "to ..." fragments."""
+    """WHAT: remove leading “to …” tokens from completion titles.
+    WHY: completion phrases often embed infinitives (“to call mom”) that shouldn’t be stored.
+    HOW: apply `_COMPLETION_LEADING_PATTERN` and trim whitespace."""
     return _COMPLETION_LEADING_PATTERN.sub("", (text or "")).strip()
 
-
 def _extract_find_keywords(message: str, *, nouns: Sequence[str] | None = None) -> str:
-    """Extract keyword phrases following verbs like find/search."""
+    """WHAT: capture the keyword string following verbs like “find” or “search”.
+    WHY: the todo tool expects ``keywords`` for find requests to filter entries.
+    HOW: regex match after verbs, strip noun phrases (todo/task), and return the cleaned remainder."""
     terms = nouns or ['todos?', 'tasks?']
     noun_pattern = "|".join(terms)
     pattern = re.compile(rf"\b(find|search|look\s*up|locate)\b\s*(?:for\s+)?(?:(?:the|my)\s+)?(?:(?:{noun_pattern})\s+)?(.+)", re.IGNORECASE)

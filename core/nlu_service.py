@@ -39,6 +39,9 @@ class NLUService:
         self._classifier_threshold = classifier_threshold
         self._payload_builder = payload_builder or PayloadBuilder()
 
+    # WHAT: parse an utterance deterministically before involving ML/LLM fallbacks.
+    # WHY: Tier‑1 should use the shared command parser whenever possible for predictable payloads.
+    # HOW: call `parse_command`, otherwise defer to `_classify`, and finally fall back to `nlu_fallback`.
     def parse(self, message: str) -> NLUResult:
         """Primary entry point: try deterministic parsing before ML fallback."""
         original = message or ""
@@ -59,18 +62,27 @@ class NLUService:
 
         return NLUResult(intent="nlu_fallback", confidence=0.4)
 
+    # WHAT: determine whether a parsed intent is confident enough to skip router escalation.
+    # WHY: classifier-based intents use a different threshold than rule-based parsing.
+    # HOW: compare the result’s confidence against either `_classifier_threshold` or `_threshold`.
     def is_confident(self, result: NLUResult) -> bool:
         """Gate router escalation by comparing confidences to the right threshold."""
         if result.source == "classifier":
             return result.confidence >= self._classifier_threshold
         return result.confidence >= self._threshold
 
+    # WHAT: build the payload dict passed to tools for deterministic runs.
+    # WHY: tools expect at least `intent` + `message` plus any parser entities.
+    # HOW: start with intent/message and merge the `entities` captured by the parser/classifier.
     def build_payload(self, result: NLUResult, message: str) -> Dict[str, Any]:
         """Combine parser entities + raw text for tool execution."""
         payload: Dict[str, Any] = {"intent": result.intent, "message": message}
         payload.update(result.entities or {})
         return payload
 
+    # WHAT: produce metadata describing the parsed intent for logging/analytics.
+    # WHY: Tier‑5 dashboards filter by domain, classifier source, and other hints.
+    # HOW: map intents to domains, include classifier confidence when applicable, and note tool requirements.
     def build_metadata(self, result: NLUResult) -> Dict[str, Any]:
         """Annotate turns with domains/sources so Tier‑5 can slice analytics."""
         tool_domains = {
@@ -96,6 +108,9 @@ class NLUService:
         metadata["requires_tool"] = result.intent != "nlu_fallback"
         return metadata
 
+    # WHAT: run the ML classifier when the deterministic parser returned nothing.
+    # WHY: gives Tier‑1 another structured guess before sending the turn to the router.
+    # HOW: call `IntentClassifier.predict`, enforce a minimum confidence, and optionally patch entities via `PayloadBuilder`.
     def _classify(self, message: str) -> Optional[NLUResult]:
         """Lazy-load classifier predictions when no rule fired."""
         if not self._classifier:

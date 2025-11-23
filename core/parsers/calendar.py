@@ -27,13 +27,17 @@ _CALENDAR_DELETE_VERBS = ("delete", "remove", "cancel")
 _CALENDAR_UPDATE_VERBS = ("update", "reschedule", "move", "shift", "change")
 
 
+    # WHAT: check whether the utterance mentions calendar/event keywords.
+    # WHY: parsing time expressions is expensive; we skip it unless the prompt looks relevant.
+    # HOW: simple substring checks for “calendar”, “event”, or “meeting”.
 def matches(lowered: str) -> bool:
-    """Fast keyword guard before running heavy calendar parsing heuristics."""
     return "calendar" in lowered or "event" in lowered or "meeting" in lowered
 
 
+    # WHAT: build structured calendar payloads (title, start/end, location) from natural language.
+    # WHY: deterministic parsing keeps create/update/list requests out of the router when possible.
+    # HOW: detect the action, extract titles/times/locations with regex helpers, infer missing datetimes, and return a `CommandResult`.
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
-    """Extract calendar CRUD payloads from natural language prompts."""
     payload: Dict[str, object] = {"message": message, "domain": "calendar"}
 
     action = _detect_action(lowered)
@@ -100,8 +104,10 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     return CommandResult(tool="calendar_edit", payload=payload)
 
 
+    # WHAT: infer which calendar CRUD verb the user intended.
+    # WHY: the tool needs an explicit action to decide how to handle the payload.
+    # HOW: look for verb keywords (list/find/create/update/delete) alongside calendar event terms.
 def _detect_action(lowered: str) -> Optional[str]:
-    """Choose between list/find/create/update/delete verbs."""
     if "calendar list" in lowered or lowered.strip().endswith("calendar") or (
         "list" in lowered and ("calendar" in lowered or "event" in lowered)
     ):
@@ -123,8 +129,10 @@ def _detect_action(lowered: str) -> Optional[str]:
     return None
 
 
+    # WHAT: recover the event title from the message (quotes, “called”, “for …”).
+    # WHY: calendar create/update/delete require a title when IDs aren’t provided.
+    # HOW: check multiple regex patterns plus `extract_title_from_text`.
 def _extract_calendar_title(message: str) -> Optional[str]:
-    """Try several patterns to recover the event title."""
     fancy_quotes = re.findall(r"[“\"]([^”\"]+)[”\"]", message)
     if fancy_quotes:
         return fancy_quotes[0].strip()
@@ -154,8 +162,10 @@ def _looks_like_time_expression(value: str) -> bool:
     return bool(_TIME_TOKEN_PATTERN.search(value))
 
 
+    # WHAT: deduce start/end datetimes from time ranges or part-of-day phrases.
+    # WHY: users often say “next Tuesday 10-12” or “Thursday afternoon” without explicit start/end fields.
+    # HOW: match range/part-of-day regexes, then build ISO timestamps using `_build_datetime_from_parts`.
 def _infer_calendar_times(message: str) -> Tuple[Optional[str], Optional[str]]:
-    """Infer start/end datetimes from ranges or part-of-day hints."""
     if not message:
         return None, None
     range_match = _CALENDAR_TIME_RANGE_PATTERN.search(message)
@@ -179,15 +189,19 @@ def _infer_calendar_times(message: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+    # WHAT: remove “on/at/for” prefixes before parsing date contexts.
+    # WHY: improves date parsing accuracy when the regex captures prepositions.
+    # HOW: strip known prefixes via regex.
 def _clean_calendar_context(text: str) -> str:
-    """Strip leading prepositions so date parsing works."""
     if not text:
         return ""
     return re.sub(r"^(?:on|at|for)\s+", "", text.strip(), flags=re.IGNORECASE)
 
 
+    # WHAT: infer event location from “at the office” phrases when no explicit location field exists.
+    # WHY: router/app flows often mention locations conversationally rather than structured fields.
+    # HOW: match “at …” patterns, reject time-like tokens, and return the cleaned string.
 def _extract_location_hint(message: str) -> Optional[str]:
-    """Guess event location from "at <place>" phrases."""
     match = re.search(r"at\s+((?:the\s+)?[A-Za-z0-9 .'-]+)", message, re.IGNORECASE)
     if not match:
         return None

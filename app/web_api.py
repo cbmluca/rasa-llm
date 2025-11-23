@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import logging
+import re
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -16,6 +20,8 @@ from pydantic import BaseModel, Field
 
 from app.config import (
     get_corrected_prompts_path,
+    get_default_reviewer_id,
+    get_governance_path,
     get_labeled_queue_path,
     get_review_queue_path,
     get_turn_log_path,
@@ -43,6 +49,13 @@ from core.orchestrator import Orchestrator, OrchestratorResponse
 from core.intent_config import load_intent_config
 from core.tooling.store_config import DATA_STORE_TO_TOOL, TOOL_TO_STORE, is_mutating_action
 from core.text_utils import hash_text
+from core.governance import GovernancePolicy, GovernancePolicyViolation
+
+REVIEWER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{2,64}$")
+logger = logging.getLogger(__name__)
+PURGE_STATE_PATH = Path("reports/purge_state.json")
+EVAL_RESULTS_PATH = Path("reports/eval_results.json")
+CLASSIFIER_REPORT_PATH = Path("reports/intent_classifier.json")
 
 
 STATIC_DIR = Path("web/static")
@@ -63,10 +76,17 @@ class CorrectionPayload(BaseModel):
     action: Optional[str] = None
     predicted_payload: Dict[str, Any] = Field(default_factory=dict)
     corrected_payload: Dict[str, Any]
+    training_duplicate: bool = False
 
 
 def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
-    """Translate ``OrchestratorResponse`` into the JSON schema the UI expects."""
+    """WHAT: reshape ``OrchestratorResponse`` into the UI schema.
+
+    WHY: the FastAPI layer and frontend agreed on a single contract so every
+    route/test can rely on consistent keys (tool payload, extras, timing).
+    HOW: pull structured fields off the orchestrator result, wrapping tool
+    metadata into a nested dict that mirrors the dashboard panels.
+    """
     return {
         "reply": result.text,
         "user_text": result.user_text,
@@ -87,7 +107,13 @@ def _format_response(result: OrchestratorResponse) -> Dict[str, Any]:
 
 
 def _read_json_if_exists(path: Path) -> Any:
-    """Utility wrapper that tolerates absent/corrupt JSON during bootstraps."""
+    """WHAT: helper for optional JSON reads (reports, stats caches).
+
+    WHY: the dashboard probes several optional files during startup; a missing
+    or partially-written file should not crash the service.
+    HOW: check existence first, then attempt ``json.load`` and swallow decode
+    errors by returning ``None`` so callers can provide defaults.
+    """
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as handle:
@@ -95,6 +121,81 @@ def _read_json_if_exists(path: Path) -> Any:
             return json.load(handle)
         except json.JSONDecodeError:
             return None
+
+
+def _parse_timestamp(value: object) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _summarize_turn_log(path: Path, *, days: int = 7, sample_limit: int = 5) -> Dict[str, Any]:
+    summary = {
+        "daily_intent_counts": {},
+        "avg_latency_ms": None,
+        "policy_violation_count": 0,
+        "policy_violation_samples": [],
+    }
+    if not path.exists():
+        return summary
+    now = datetime.now(tz=timezone.utc)
+    cutoff = now - timedelta(days=days)
+    daily: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))  # type: ignore[var-annotated]
+    latencies: List[float] = []
+    violation_samples: List[dict] = []
+    violation_count = 0
+    for row in iter_jsonl(path):
+        ts = _parse_timestamp(row.get("timestamp"))
+        if ts and ts < cutoff:
+            continue
+        day_key = ts.strftime("%Y-%m-%d") if ts else "unknown"
+        intent = row.get("intent")
+        if isinstance(intent, str) and intent:
+            daily[day_key][intent] += 1
+        latency = row.get("latency_ms")
+        if isinstance(latency, (int, float)):
+            latencies.append(float(latency))
+        extras = row.get("extras") or {}
+        violation_meta = extras.get("policy_violation")
+        if violation_meta or row.get("resolution_status") == "policy_violation":
+            violation_count += 1
+            if len(violation_samples) < sample_limit:
+                violation_samples.append(
+                    {
+                        "timestamp": ts.isoformat() if ts else row.get("timestamp"),
+                        "reason": (violation_meta or {}).get("reason") or "policy_violation",
+                        "tool": (violation_meta or {}).get("tool") or row.get("tool_name"),
+                        "user_text": row.get("user_text"),
+                    }
+                )
+    if daily:
+        ordered = {
+            day: dict(intents)
+            for day, intents in sorted(daily.items(), key=lambda item: item[0], reverse=True)
+        }
+        summary["daily_intent_counts"] = ordered
+    if latencies:
+        summary["avg_latency_ms"] = sum(latencies) / len(latencies)
+    summary["policy_violation_count"] = violation_count
+    summary["policy_violation_samples"] = violation_samples
+    return summary
+
+
+def _read_purge_state(path: Path) -> Optional[dict]:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def create_app(
@@ -106,17 +207,17 @@ def create_app(
     turn_log_path: Optional[Path] = None,
     static_dir: Optional[Path] = None,
     export_dir: Optional[Path] = None,
+    governance_policy: Optional[GovernancePolicy] = None,
+    purge_state_path: Optional[Path] = None,
 ) -> FastAPI:
-    """Instantiate the FastAPI app and expose orchestrator-backed endpoints.
+    """WHAT: instantiate FastAPI + Tier‑1 orchestrator wiring for reviewers.
 
-    WHAT: load persisted queues/logs, mount static Tier‑5 assets, and register
-    all CRUD/chat endpoints needed by the reviewer UI.
-    WHY: the API is the sole bridge between Tier‑1 runtime state and the
-    JavaScript dashboard; documenting its wiring clarifies which paths produce
-   /consume JSONL files.
-    HOW: accept optional dependency overrides for tests, run the legacy
-    migrations (rehydrate/dedupe), and stash paths on ``app.state`` so route
-    handlers can mutate them without global singletons.
+    WHY: Tier‑5 tooling reuses the same orchestration stack as the CLI so every
+    correction reflects actual runtime behavior while still exposing queue/file
+    utilities for admin workflows.
+    HOW: accept dependency overrides (tests), hydrate queue paths, run
+    migrations (rehydrate/dedupe), cache directories on ``app.state``, and
+    mount the static/export directories before registering routes.
     """
     orch = orchestrator or build_orchestrator()
     pending = pending_path or get_review_queue_path()
@@ -125,6 +226,8 @@ def create_app(
     turn_log = turn_log_path or get_turn_log_path()
     static_root = static_dir or STATIC_DIR
     exports_root = export_dir or EXPORT_DIR
+    policy = governance_policy or GovernancePolicy(get_governance_path())
+    purge_state = purge_state_path or PURGE_STATE_PATH
 
     rehydrate_labeled_prompts(labeled_path=labeled, pending_path=pending)
     dedupe_pending_prompts(pending)
@@ -140,13 +243,39 @@ def create_app(
     app.state.turn_log_path = turn_log
     app.state.static_root = static_root
     app.state.export_root = exports_root
+    app.state.governance_policy = policy
+    app.state.default_reviewer_id = get_default_reviewer_id()
+    app.state.purge_state_path = purge_state
 
     app.mount("/static", StaticFiles(directory=static_root, check_dir=False), name="static")
     app.mount("/exports", StaticFiles(directory=exports_root, check_dir=False), name="exports")
 
+    def _resolve_reviewer_id(request: Request) -> str:
+        """Extract or default the reviewer identifier for the current request."""
+        raw = request.headers.get("x-reviewer-id") or request.query_params.get("reviewer_id")
+        default_id = app.state.default_reviewer_id
+        if raw:
+            candidate = raw.strip()
+            if not candidate:
+                raise HTTPException(status_code=400, detail="Reviewer ID cannot be blank.")
+            if not REVIEWER_ID_PATTERN.fullmatch(candidate):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Reviewer ID must be 2-64 characters (letters, numbers, dot, underscore, or hyphen).",
+                )
+            return candidate
+        logger.warning("Reviewer ID missing on %s; defaulting to '%s'.", request.url.path, default_id)
+        return default_id
+
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
-        """Serve the compiled Tier‑5 dashboard."""
+        """WHAT: deliver the built reviewer UI.
+
+        WHY: Tier‑5 deploys the compiled SPA under ``web/static`` and expects
+        this endpoint to inline the HTML when operators hit the root.
+        HOW: read ``index.html`` from the configured static root and raise a
+        404 with guidance when assets are missing.
+        """
         index_path = app.state.static_root / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=404, detail="Web UI assets are missing. Run Tier-5 build.")
@@ -154,21 +283,39 @@ def create_app(
 
     @app.get("/api/health")
     def health_check() -> Dict[str, Any]:
-        """Simple uptime probe consumed by deploy tooling."""
+        """WHAT: inexpensive uptime probe for orchestrator + FastAPI.
+
+        WHY: CI and container monitors hit this endpoint to ensure the process
+        is alive without triggering expensive chat/tool logic.
+        HOW: return an OK status plus current UTC timestamp to aid log merges.
+        """
         return {
             "status": "ok",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
 
     @app.post("/api/chat")
-    def chat(payload: ChatRequest) -> Dict[str, Any]:
-        """Forward chat prompts to the orchestrator and enqueue pending items."""
+    def chat(payload: ChatRequest, request: Request) -> Dict[str, Any]:
+        """WHAT: bridge user chat to Tier‑1 and seed the pending queue.
+
+        WHY: every dashboard submission should run through the orchestrator so
+        logging, probes, and dry-run semantics mirror the CLI/session behavior.
+        HOW: run ``handle_message_with_details``, normalize extras/history, and
+        persist a pending record (with conversation metadata) for reviewers.
+        """
         message = payload.message.strip()
         if not message:
             raise HTTPException(status_code=400, detail="Message is required.")
+        reviewer_id = _resolve_reviewer_id(request)
         result = app.state.orchestrator.handle_message_with_details(message)
         formatted = _format_response(result)
-        formatted_extras = formatted.get("extras") or {}
+        policy_version = app.state.governance_policy.policy_version
+        formatted_extras = dict(formatted.get("extras") or {})
+        formatted_extras.setdefault("policy_version", policy_version)
+        formatted_extras.setdefault("reviewer_id", reviewer_id)
+        formatted["extras"] = formatted_extras
+        formatted["policy_version"] = policy_version
+        formatted["reviewer_id"] = reviewer_id
         history_prompts = [
             entry.get("user_text", "")
             for entry in formatted_extras.get("conversation_history") or []
@@ -187,6 +334,7 @@ def create_app(
                 staged=formatted_extras.get("staged", False),
                 related_prompts=history_prompts,
                 conversation_entry_id=formatted_extras.get("conversation_entry_id"),
+                reviewer_id=reviewer_id,
             )
             if pending_result.get("record"):
                 formatted["pending_record"] = pending_result["record"]
@@ -196,7 +344,13 @@ def create_app(
 
     @app.get("/api/logs/pending")
     def pending_logs(limit: int = 25, page: int = 1) -> Dict[str, Any]:
-        """Return paginated pending prompts for the correction queue."""
+        """WHAT: fetch paginated pending prompts for Tier‑5 reviewers.
+
+        WHY: the queue drives the dashboard cards; exposing pagination keeps the
+        HTTP payload manageable while surfacing per-intent summaries.
+        HOW: cap page/limit inputs, call ``list_pending_with_hashes`` to ensure
+        prompt ids/hashes exist, and augment response with queue summary/flags.
+        """
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
@@ -215,7 +369,13 @@ def create_app(
 
     @app.get("/api/logs/classifier")
     def classifier_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
-        """Expose low-confidence classifier turns for manual review."""
+        """WHAT: surface classifier mistakes/misses for manual QA.
+
+        WHY: reviewers triage low-confidence or incorrect classifier turns to
+        keep the model aligned with real chat distribution.
+        HOW: delegate to ``review_classifier_predictions`` which filters the
+        turn log plus labeled file for interesting entries.
+        """
         findings = review_classifier_predictions(
             turn_log=app.state.turn_log_path,
             labeled_path=app.state.labeled_path,
@@ -226,13 +386,25 @@ def create_app(
 
     @app.get("/api/logs/labeled")
     def labeled_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
-        """Stream historic labeled prompts so the Training tab can load batches."""
+        """WHAT: provide labeled samples for the Training tab.
+
+        WHY: analysts export batches of reviewer labels when retraining NLU
+        and need intent filters to drill into problem areas.
+        HOW: call ``load_labeled_prompts`` with limit/intent filters and return
+        the resulting list.
+        """
         records = load_labeled_prompts(app.state.labeled_path, limit=max(1, min(limit, 200)), intent=intent)
         return {"items": records}
 
     @app.get("/api/logs/corrected")
     def corrected_logs(limit: int = 25, page: int = 1, intent: Optional[str] = None) -> Dict[str, Any]:
-        """Paginate the labeled JSONL file for the Labeled Prompt Pairs table."""
+        """WHAT: paginate the corrected prompts JSONL for dashboard tables.
+
+        WHY: Tier‑5 needs to browse reviewer corrections chronologically and
+        filter by intent/tool to reconcile training stats.
+        HOW: rely on ``load_corrected_prompts`` for pagination/filtering and
+        return its structured dict (items + counts).
+        """
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         data = load_corrected_prompts(
@@ -245,7 +417,13 @@ def create_app(
 
     @app.delete("/api/logs/corrected/{record_id}")
     def delete_corrected(record_id: str) -> Dict[str, Any]:
-        """Trim a labeled prompt pair so experiments can discard test entries."""
+        """WHAT: remove corrected prompt rows that are no longer needed.
+
+        WHY: experiments occasionally seed synthetic or duplicate labels; this
+        endpoint lets admins prune them without editing files manually.
+        HOW: stream the JSONL file, drop the matching row, rewrite the file,
+        and raise 404s for unknown ids.
+        """
         if not record_id:
             raise HTTPException(status_code=400, detail="record_id is required.")
         corrected_path = app.state.corrected_path
@@ -268,8 +446,16 @@ def create_app(
         return {"deleted": True}
 
     @app.post("/api/logs/label")
-    def label_prompt(payload: CorrectionPayload) -> Dict[str, Any]:
-        """Persist reviewer corrections and optionally run the underlying tool."""
+    def label_prompt(payload: CorrectionPayload, request: Request) -> Dict[str, Any]:
+        """WHAT: persist reviewer corrections + trigger tool mutations.
+
+        WHY: Tier‑5 workflows need both the audited corrected payloads and the
+        ability to push changes into JSON stores when reviewers approve.
+        HOW: normalize reviewer payload/action, run the target tool if the
+        action mutates data, append a correction entry, drop pending rows (plus
+        related prompts), and update conversation memory when available.
+        """
+        reviewer_id = _resolve_reviewer_id(request)
         reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
         corrected_payload = dict(payload.corrected_payload or {})
         if reviewer_action:
@@ -284,11 +470,20 @@ def create_app(
 
         store_id = TOOL_TO_STORE.get(payload.tool)
         action_value = str(corrected_payload.get("action") or "").strip().lower()
-        should_mutate = is_mutating_action(payload.tool, action_value)
+        should_mutate = is_mutating_action(payload.tool, action_value) and not payload.training_duplicate
 
         if should_mutate:
             try:
                 tool_result = app.state.orchestrator.run_tool(payload.tool, corrected_payload)
+            except GovernancePolicyViolation as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": exc.user_message,
+                        "policy_version": exc.policy_version,
+                        "policy_violation": exc.to_metadata(),
+                    },
+                ) from exc
             except KeyError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if isinstance(tool_result, dict) and tool_result.get("error"):
@@ -307,6 +502,7 @@ def create_app(
                 corrected_payload=corrected_payload,
                 corrected_path=app.state.corrected_path,
                 updated_stores=updated_stores,
+                reviewer_id=reviewer_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -323,11 +519,22 @@ def create_app(
             conversation_entry_id = pending_record.get("conversation_entry_id")
             app.state.orchestrator.update_conversation_payload(conversation_entry_id, corrected_payload)
 
-        return {"record": record, "updated_stores": updated_stores, "latest_tool_result": tool_result}
+        return {
+            "record": record,
+            "updated_stores": updated_stores,
+            "latest_tool_result": tool_result,
+            "reviewer_id": reviewer_id,
+        }
 
     @app.delete("/api/logs/pending/{prompt_id}")
     def delete_pending(prompt_id: str) -> Dict[str, Any]:
-        """Remove a pending entry when reviewers discard it from the UI."""
+        """WHAT: discard pending queue entries without labeling them.
+
+        WHY: some prompts are OOD or duplicates; reviewers need to drop them so
+        the queue reflects only actionable records.
+        HOW: call ``delete_pending_entry`` with the provided id/hash and return
+        a confirmation or 404 when nothing matched.
+        """
         if not prompt_id:
             raise HTTPException(status_code=400, detail="prompt_id is required.")
         removed = delete_pending_entry(app.state.pending_path, prompt_id)
@@ -337,7 +544,13 @@ def create_app(
 
     @app.get("/api/intents")
     def list_intents() -> Dict[str, Any]:
-        """Return the configured intents/actions to populate dropdowns."""
+        """WHAT: expose current intent/action definitions for the UI.
+
+        WHY: dropdowns in the Pending card and correction forms need canonical
+        names to avoid drift with server-side validation.
+        HOW: load ``intent_config`` and return both the string list and action
+        per intent map.
+        """
         config = load_intent_config()
         return {
             "intents": config.names(),
@@ -346,7 +559,13 @@ def create_app(
 
     @app.post("/api/logs/export")
     def export_prompts(fmt: str = "csv", dedupe: bool = True) -> Dict[str, Any]:
-        """Dump the pending queue so analysts can copy snapshots out of band."""
+        """WHAT: snapshot pending prompts for offline analysis.
+
+        WHY: analysts need to copy the queue into spreadsheets for audits or
+        bulk labeling and require dedupe controls for repeated prompts.
+        HOW: validate format, call ``export_pending`` into a timestamped folder,
+        and translate output paths into mount-relative URLs for download.
+        """
         fmt = fmt.lower()
         if fmt not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -372,7 +591,13 @@ def create_app(
 
     @app.post("/api/logs/import")
     async def import_labels(file: UploadFile = File(...), fmt: str = Form("csv"), dedupe: bool = Form(True)) -> Dict[str, Any]:
-        """Allow reviewers to bulk-import CSV/JSON label files."""
+        """WHAT: bulk ingest CSV/JSON labels exported from spreadsheets.
+
+        WHY: Tier‑5 reviewers may label prompts offline; importing batches keeps
+        the labeled JSONL in sync and dedupes against existing hashes.
+        HOW: persist upload to a temp file, call ``append_labels`` with format
+        metadata, and delete the temp file regardless of success.
+        """
         fmt_value = fmt.lower()
         if fmt_value not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -397,7 +622,13 @@ def create_app(
 
     @app.get("/api/data/{store_id}")
     def list_store(store_id: str) -> Dict[str, Any]:
-        """Proxy Tier-3 tool list actions so the Data Stores tab stays live."""
+        """WHAT: expose tool-backed list actions for the Data Stores tab.
+
+        WHY: reviewers preview current JSON stores (todos, calendar, etc.)
+        without writing custom scripts, ensuring the UI mirrors backend state.
+        HOW: map ``store_id`` to a tool via ``DATA_STORE_TO_TOOL`` and run the
+        orchestrator with its list payload.
+        """
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -407,7 +638,13 @@ def create_app(
 
     @app.post("/api/data/{store_id}")
     def mutate_store(store_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Expose a thin CRUD endpoint for quick in-browser store edits."""
+        """WHAT: allow direct CRUD mutations from the Data Stores tab.
+
+        WHY: admins occasionally fix data without walkthrough prompts; this
+        endpoint lets them run tool commands directly.
+        HOW: validate payload shape, ensure the store is known, forward the
+        request to the corresponding tool, and bubble up tool errors as HTTP 400.
+        """
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -422,16 +659,36 @@ def create_app(
 
     @app.get("/api/stats")
     def stats() -> Dict[str, Any]:
-        """Aggregate queue/label counters for the dashboard overview cards."""
+        """WHAT: aggregate pending/labeled stats for dashboard cards.
+
+        WHY: reviewers rely on the home view to gauge queue health and model
+        progress without opening each tab.
+        HOW: call ``summarize_pending_queue``, count corrected rows, sample
+        recent pending entries, and optionally include the classifier report.
+        """
         pending_summary = summarize_pending_queue(app.state.pending_path)
         corrected_count = count_jsonl_rows(app.state.corrected_path)
-        classifier_report = _read_json_if_exists(Path("reports/intent_classifier.json"))
+        classifier_report = _read_json_if_exists(CLASSIFIER_REPORT_PATH)
+        policy: GovernancePolicy = app.state.governance_policy
+        turn_metrics = _summarize_turn_log(app.state.turn_log_path)
+        purge_state = _read_purge_state(app.state.purge_state_path)
+        eval_report = _read_json_if_exists(EVAL_RESULTS_PATH)
         return {
             "pending": pending_summary,
             "labeled_count": corrected_count,
             "corrected_count": corrected_count,
             "pending_sample": list_recent_pending(app.state.pending_path, limit=25),
             "classifier_report": classifier_report,
+            "policy_version": policy.policy_version,
+            "allowed_tools": list(policy.allowed_tools),
+            "allowed_models": list(policy.allowed_models),
+            "retention_limits": policy.retention_limits,
+            "last_purge_timestamp": purge_state.get("last_run") if purge_state else None,
+            "avg_latency_ms": turn_metrics["avg_latency_ms"],
+            "daily_intent_counts": turn_metrics["daily_intent_counts"],
+            "policy_violation_count": turn_metrics["policy_violation_count"],
+            "policy_violation_samples": turn_metrics["policy_violation_samples"],
+            "eval_results": eval_report,
         }
 
     return app

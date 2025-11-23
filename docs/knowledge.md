@@ -33,5 +33,13 @@
 - `core/learning_logger.py` scrubs PII by default; only disable redaction for local debugging and document the decision.
 - Legacy Rasa bot is still in `legacy_rasa/` for reference but isn’t part of the runtime.
 
+## Governance Runbook
+- **Policy file**: `config/governance.yml` describes the active policy version, allowed models/tools, reviewer roles, PII masking regexes, and per-bucket `retention_max_entries`. Update this file (not hardcoded constants) whenever a policy change is approved.
+- **Reviewer IDs**: Tier‑5 reviewers must set `X-Reviewer-ID`; the web dashboard prompts for initials and stores them in `localStorage`, but CLI scripts/testing harnesses should include the header manually. Pending/corrected rows inherit the resolved ID for audit trails.
+- **Purge workflow**: run `python -m app.governance_tasks purge --config config/governance.yml` to trim logs/queues/stores to the configured entry counts. Use `--dry-run` to preview and `--log-path`/`--state-path` (defaults in `reports/`) so cron/GitHub Actions can capture summaries plus the “last purge” timestamp surfaced in `/api/stats`.
+- **Stats & dashboards**: `/api/stats` aggregates policy metadata, retention settings, daily intent counts, latency averages, and recent policy violations. The Governance tab in the UI reads this endpoint, so keep `reports/purge_state.json` and `reports/eval_results.json` up to date (run the eval suite after parser/tool changes).
+- **Documentation**: Security/gov specifics (reviewer identity, purge commands, eval gating) live in `docs/security.md`. Update that file whenever headers, retention semantics, or CLI usage changes so reviewers have an authoritative runbook.
+
 ## Future features
 - **Ensembles of LLMs** – Stand up a comparison harness that routes critical prompts through multiple foundation models, diffs their structured outputs, and flags divergent facts for reviewer attention so we can spot hallucinations before they hit users.
+- **Task manager (IoT lock integration)** – Explore tying the task list to hardware lockouts so rewards (phone/candy access) only unlock when tasks are confirmed complete. Start with vocal/text acknowledgements hooked into the todo tool, then iterate toward richer signals (screen recordings, sensors) so the timer-lock can adapt to actual completion time instead of pre-set durations.

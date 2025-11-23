@@ -20,7 +20,9 @@ class LLMRouter:
         self._api_key = api_key
         self._enabled_tools = tuple(enabled_tools)
 
-    # --- Prompt construction: tell the LLM the contract before asking for help
+    # WHAT: build the router prompt describing available tools and the JSON contract.
+    # WHY: we need deterministic JSON responses so Tier‑1 can audit LLM decisions.
+    # HOW: embed the tool list and instruct the model to respond with either a tool payload or `{ "type": "none" }`.
     def _build_prompt(self, message: str) -> str:
         tools = "\n".join(f"- {name}" for name in self._enabled_tools) or "(no tools enabled)"
         return (
@@ -32,7 +34,9 @@ class LLMRouter:
             f"User: {message}"
         )
 
-    # --- Response parsing: prefer structured instructions but fall back to text
+    # WHAT: parse the LLM’s routing reply into a structured dict.
+    # WHY: downstream orchestrator logic expects explicit tool/name/payload fields.
+    # HOW: attempt JSON decode, fall back to free-form text when the model deviates.
     def _parse_response(self, content: str) -> Dict[str, object]:
         try:
             data = json.loads(content)
@@ -55,6 +59,9 @@ class LLMRouter:
 
         return {"type": "text", "content": content.strip()}
 
+    # WHAT: ask the LLM which tool should run, returning either a tool payload or text.
+    # WHY: this is the main router entry point when deterministic parsing can’t decide.
+    # HOW: call `_build_prompt`, send it via `_chat_completion`, and parse the result.
     def route(self, message: str) -> Union[str, Dict[str, object]]:
         """Ask the LLM which tool (if any) should run for this message."""
         prompt = self._build_prompt(message)
@@ -77,6 +84,9 @@ class LLMRouter:
             return "LLM routing returned no content."
         return self._parse_response(content)
 
+    # WHAT: request a single tool suggestion even when the router wouldn’t normally execute.
+    # WHY: used for soft hints (e.g., fill-in forms) when we still want human review.
+    # HOW: prompt the LLM with a simple JSON contract and return the tool name unless it says “none”.
     def suggest_tool(self, message: str) -> str | None:
         """Ask the LLM to suggest a single tool even if it wouldn't normally run one."""
 
@@ -107,6 +117,9 @@ class LLMRouter:
                 return value
         return None
 
+    # WHAT: generate a fallback text answer via ChatGPT when no tool applies.
+    # WHY: keeps Tier‑1 useful when deterministic flows fail by returning a prefixed LLM answer.
+    # HOW: call `_chat_completion` with a plain system prompt and wrap the content in `From ChatGPT: …`.
     def general_answer(self, message: str) -> str:
         """Fallback helper used when deterministic stacks provide no answer."""
         content, error = self._chat_completion(
@@ -124,6 +137,9 @@ class LLMRouter:
         return f"From ChatGPT: {content.strip()}"
 
     # --- Shared OpenAI helper ------------------------------------------------
+    # WHAT: shared OpenAI chat completion wrapper.
+    # WHY: both routing, hints, and fallback responses use the same API plumbing.
+    # HOW: instantiate the OpenAI client, call `chat.completions.create`, and catch configuration/network errors.
     def _chat_completion(
         self,
         messages: List[Dict[str, str]],

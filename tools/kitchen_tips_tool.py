@@ -197,15 +197,10 @@ class KitchenTipsStore:
         return None
 
 
+    # WHAT: run kitchen tip list/find/create/update/delete calls on the JSON store.
+    # WHY: centralizes matching logic (ID/title/keywords) so probes and UI stay aligned.
+    # HOW: normalize the action, hydrate lookup fields, delegate to `KitchenTipsStore`, and honor dry-run for staged changes.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Kitchen tips CRUD surface shared by the orchestrator and router.
-
-    WHAT: list/find/create/update/delete structured tips.
-    WHY: consolidates business rules (title matching, keyword search) so the
-    UI and probes never drift apart.
-    HOW: normalize the action, hydrate IDs/titles, and call ``KitchenTipsStore``
-    with optional dry-run semantics for staged corrections.
-    """
 
     action = str(payload.get("action", "list")).strip().lower() or "list"
     if action in {"search", "get"}:
@@ -311,8 +306,10 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     return _error_response(action, "unsupported_action", f"Unsupported kitchen tips action '{action}'.")
 
 
+    # WHAT: render structured kitchen tip responses as helpful chat text.
+    # WHY: ensures both deterministic flows and router fallbacks present consistent summaries.
+    # HOW: branch on the action, list matches or details, and fall back to error/raw messaging helpers.
 def format_kitchen_tips_response(result: Dict[str, Any]) -> str:
-    """Render a friendly description of the kitchen tip lookup."""
 
     if "error" in result:
         return _with_raw_output(result.get("message", "Kitchen tips request failed."), result, include_raw=False)

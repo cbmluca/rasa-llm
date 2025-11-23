@@ -1,0 +1,41 @@
+policy_version: "2024-06-tier6"
+allowed_models:
+  - gpt-4o-mini
+  - gpt-4o
+allowed_tools:
+  - weather
+  - news
+  - todo_list
+  - kitchen_tips
+  - calendar_edit
+  - app_guide
+retention_max_entries:
+  turn_logs: 200
+  pending_queue: 200
+  corrected_prompts: 200
+  tool_stores: 200
+reviewer_roles:
+  - id: lead
+    name: Lead Reviewer
+    permissions:
+      - approve
+      - purge
+      - manage_policy
+  - id: analyst
+    name: Analyst
+    permissions:
+      - label
+      - approve
+pii_rules:
+  - name: email
+    pattern: (?P<value>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})
+    replacement: "[REDACTED_EMAIL]"
+  - name: phone
+    pattern: (\+?\d[\d\-\s()]{7,}\d)
+    replacement: "[REDACTED_PHONE]"
+  - name: card
+    pattern: (\b\d{4}[\s\-]?){3}\d{4}\b
+    replacement: "[REDACTED_CARD]"
+  - name: gov_id
+    pattern: \b\d{3}-\d{2}-\d{4}\b
+    replacement: "[REDACTED_GOV_ID]"

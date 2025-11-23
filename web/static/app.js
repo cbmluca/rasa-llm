@@ -56,7 +56,7 @@ const FIELD_LIBRARY = {
     control: () => {
       const select = document.createElement('select');
       select.innerHTML = `
-        <option value="">None</option>
+        <option value=""></option>
         <option value="low">Low</option>
         <option value="medium">Medium</option>
         <option value="high">High</option>
@@ -139,7 +139,7 @@ const ENTITY_FIELD_CONFIG = {
     hydrate: (entity) => ({
       id: entity.id,
       title: entity.title || '',
-      status: entity.status || 'pending',
+      status: entity.status || '',
       deadline: entity.deadline || '',
       priority: entity.priority || '',
       content: Array.isArray(entity.notes) ? entity.notes.join('\n') : entity.notes || '',
@@ -298,11 +298,13 @@ const FIELD_LAYOUTS = {
 
 const STORAGE_KEYS = {
   ACTIVE_PAGE: 'tier5_active_page',
-  SCROLL_PREFIX: 'tier5_scroll_',
   PENDING_PAGE: 'tier5_pending_page',
   CHAT_HISTORY: 'tier5_chat_history',
   LATEST_CONFIRMED: 'tier5_latest_confirmed',
   SELECTED_PROMPT: 'tier5_selected_prompt',
+  REVIEWER_ID: 'tier5_reviewer_id',
+  LAST_PURGE_ALERT_SIGNATURE: 'tier5_last_purge_alert_signature',
+  LAST_TRAINING_ALERT_COUNT: 'tier5_last_training_alert_count',
 };
 
 let pollTimer;
@@ -327,6 +329,7 @@ const state = {
   stats: {},
   datetimeInputs: {},
   pendingChatEntry: null,
+  duplicateConfirmations: {},
   dataStores: {
     todos: [],
     calendar: [],
@@ -334,6 +337,8 @@ const state = {
     app_guide: [],
   },
   activeDataTab: 'todos',
+  reviewerId: '',
+  notifications: [],
 };
 
 const el = {
@@ -391,6 +396,20 @@ const el = {
   refreshButton: document.querySelector('#refresh-button'),
   toast: document.querySelector('#toast'),
   trainingPage: document.querySelector('#training-page'),
+  reviewerBadge: document.querySelector('#reviewer-id-badge'),
+  reviewerButton: document.querySelector('#set-reviewer-id'),
+  notificationsList: document.querySelector('#notifications-list'),
+  governancePolicyVersion: document.querySelector('#governance-policy-version'),
+  governanceAllowedTools: document.querySelector('#governance-allowed-tools'),
+  governanceAllowedModels: document.querySelector('#governance-allowed-models'),
+  governanceLastPurge: document.querySelector('#governance-last-purge'),
+  governanceAvgLatency: document.querySelector('#governance-avg-latency'),
+  governanceViolationCount: document.querySelector('#governance-violation-count'),
+  governanceViolationList: document.querySelector('#governance-violation-list'),
+  retentionTableBody: document.querySelector('#retention-table-body'),
+  governanceIntentCounts: document.querySelector('#governance-intent-counts'),
+  governanceEvalIntent: document.querySelector('#governance-eval-intent'),
+  governanceEvalAction: document.querySelector('#governance-eval-action'),
 };
 
 const navButtons = document.querySelectorAll('.nav-link');
@@ -399,15 +418,108 @@ if (typeof window !== 'undefined' && window.history && 'scrollRestoration' in wi
   window.history.scrollRestoration = 'manual';
 }
 
+const REVIEWER_ID_PATTERN = /^[A-Za-z0-9._-]{2,32}$/;
+const PURGE_MAX_AGE_DAYS = 7;
+const TRAINING_ALERT_INCREMENT = 30;
+
+function validateReviewerId(value) {
+  return REVIEWER_ID_PATTERN.test(value || '');
+}
+
+function updateReviewerBadge() {
+  if (el.reviewerBadge) {
+    el.reviewerBadge.textContent = state.reviewerId || 'anonymous';
+  }
+}
+
+function setReviewerId(newId) {
+  state.reviewerId = newId || '';
+  updateReviewerBadge();
+  try {
+    if (state.reviewerId) {
+      localStorage.setItem(STORAGE_KEYS.REVIEWER_ID, state.reviewerId);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.REVIEWER_ID);
+    }
+  } catch (err) {
+    // ignore storage failures
+  }
+}
+
+function restoreReviewerId() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_ID);
+    if (stored && validateReviewerId(stored)) {
+      state.reviewerId = stored;
+    } else if (stored) {
+      localStorage.removeItem(STORAGE_KEYS.REVIEWER_ID);
+    }
+  } catch (err) {
+    // ignore
+  }
+  updateReviewerBadge();
+}
+
+function promptForReviewerId() {
+  const existing = state.reviewerId;
+  const input = window.prompt(
+    'Enter your reviewer ID (letters/numbers, 2-32 chars).',
+    existing || '',
+  );
+  if (input === null) {
+    return false;
+  }
+  const normalized = (input || '').trim();
+  if (!validateReviewerId(normalized)) {
+    showToast('Reviewer ID must be 2-32 characters (letters, numbers, . _ -).', 'error');
+    return false;
+  }
+  setReviewerId(normalized);
+  showToast(`Reviewer set to ${normalized}`, 'success');
+  return true;
+}
+
+function ensureReviewerId() {
+  restoreReviewerId();
+  if (!state.reviewerId) {
+    const accepted = promptForReviewerId();
+    if (!accepted) {
+      showToast('Using anonymous reviewer ID until you set one.', 'warning');
+    }
+  }
+}
+
+function getReviewerId() {
+  if (state.reviewerId) {
+    return state.reviewerId;
+  }
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_ID);
+    if (stored && validateReviewerId(stored)) {
+      state.reviewerId = stored;
+      updateReviewerBadge();
+      return state.reviewerId;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return '';
+}
+
 // WHAT: standardize AJAX calls with JSON parsing and friendly errors.
 // WHY: every frontend API call should share headers/logic so errors propagate consistently.
 // HOW: invoked by every `/api/...` call so it wraps `fetch`, parses success (incl. 204), and bubbles server detail strings when orchestration endpoints fail.
 async function fetchJSON(url, options = {}) {
+  const reviewerId = getReviewerId();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+  if (reviewerId) {
+    headers['X-Reviewer-ID'] = reviewerId;
+  }
   const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
     ...options,
   });
   if (response.ok) {
@@ -663,6 +775,10 @@ function buildPendingMetadata(item) {
   if (created) {
     parts.push(`Created ${created}`);
   }
+  const reviewerId = item.reviewer_id || item.extras?.reviewer_id;
+  if (reviewerId) {
+    parts.push(`Reviewer ${reviewerId}`);
+  }
   if (typeof item.confidence === 'number') {
     parts.push(`Confidence ${item.confidence.toFixed(2)}`);
   }
@@ -695,7 +811,7 @@ function sortPendingByRecency(items) {
   });
   const seen = new Set();
   return sorted.filter((item) => {
-    const key = item?.prompt_id || item?.text_hash || item?.user_text;
+    const key = item?.prompt_id;
     if (!key) {
       return true;
     }
@@ -1339,6 +1455,19 @@ function getTitleOptions(tool) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
+// WHAT: detect whether a create action would duplicate an existing entity title.
+// WHY: during training we sometimes log duplicates that should not mutate the underlying store.
+// HOW: normalize the requested title and compare it against the cached store entries for the tool.
+function hasDuplicateTitle(tool, titleValue) {
+  if (!tool || !titleValue) return false;
+  const config = ENTITY_FIELD_CONFIG[tool];
+  if (!config) return false;
+  const normalizedTitle = titleValue.trim().toLowerCase();
+  if (!normalizedTitle) return false;
+  const entries = state.dataStores[config.store] || [];
+  return entries.some((entry) => (entry.title || '').trim().toLowerCase() === normalizedTitle);
+}
+
 // WHAT: return entity options that match a specific title (case-insensitive).
 // WHY: used to auto-select IDs when a reviewer picks an existing title.
 // HOW: look up the normalized title inside the grouped map and return every entity option that shares it so subsequent ID auto-fill logic can evaluate the match count.
@@ -1695,7 +1824,11 @@ function renderRelatedPrompts() {
     li.appendChild(removeBtn);
     el.relatedPromptsList.appendChild(li);
   });
-  updateRelatedPromptOptions();
+  if (el.relatedPromptsInput && document.activeElement === el.relatedPromptsInput) {
+    updateRelatedPromptOptions();
+  } else {
+    hideRelatedPromptOptions();
+  }
   renderIntendedEntities();
 }
 
@@ -1965,6 +2098,9 @@ function renderPendingList() {
     }
     li.addEventListener('click', (event) => {
       if (el.editorPanel && el.editorPanel.contains(event.target)) {
+        return;
+      }
+      if (state.selectedPromptId === item.prompt_id) {
         return;
       }
       selectPendingPrompt(item);
@@ -2453,7 +2589,10 @@ function renderDynamicFields(tool, action) {
     const entityConfig = ENTITY_FIELD_CONFIG[tool];
     const isEntityField = entityConfig && entityConfig.field === field;
     const shouldUseTitleDropdown =
-      TITLE_SELECT_TOOLS.has(tool) && TITLE_SELECT_ACTIONS.has(normalizedAction) && field === 'title';
+      TITLE_SELECT_TOOLS.has(tool) &&
+      TITLE_SELECT_ACTIONS.has(normalizedAction) &&
+      field === 'title' &&
+      normalizedAction !== 'update';
     if (shouldUseTitleDropdown) {
       const container = document.createElement('div');
       container.className = 'search-input';
@@ -2588,7 +2727,7 @@ function renderVersionHistory() {
     return;
   }
   const history = state.corrected
-    .filter((record) => record.id === state.selectedPrompt.prompt_id)
+    .filter((record) => record.id === state.selectedPrompt?.prompt_id)
     .sort((a, b) => (a.version || 0) - (b.version || 0));
   if (!history.length) {
     return;
@@ -2648,7 +2787,8 @@ function renderLatestConfirmed() {
     el.latestConfirmedTitle.textContent = record.prompt_text || 'Triggered prompt';
   }
   if (el.latestConfirmedMeta) {
-    el.latestConfirmedMeta.textContent = `${record.reviewer_intent} v${record.version}`;
+    const reviewerText = record.reviewer_id ? `Reviewer ${record.reviewer_id} • ` : '';
+    el.latestConfirmedMeta.textContent = `${reviewerText}${record.reviewer_intent} v${record.version}`;
   }
   if (el.latestConfirmedPayload) {
     const pre = document.createElement('pre');
@@ -2711,7 +2851,11 @@ function renderCorrectionForm() {
 function selectPendingPrompt(item) {
   state.selectedPromptId = item.prompt_id;
   try {
-    localStorage.setItem(STORAGE_KEYS.SELECTED_PROMPT, item.prompt_id);
+    if (item.prompt_id) {
+      localStorage.setItem(STORAGE_KEYS.SELECTED_PROMPT, item.prompt_id);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.SELECTED_PROMPT);
+    }
   } catch (err) {
     // ignore
   }
@@ -2873,6 +3017,21 @@ async function submitCorrection() {
     showToast('Select a prompt and fill the required fields first.');
     return;
   }
+  const reviewerAction = (payload.action || payload.corrected_payload?.action || '').toLowerCase();
+  const titleValue = (payload.corrected_payload?.title || '').trim();
+  const isDuplicateTraining =
+    reviewerAction === 'create' && hasDuplicateTitle(payload.tool, titleValue);
+  if (isDuplicateTraining && !state.duplicateConfirmations[payload.prompt_id]) {
+    state.duplicateConfirmations[payload.prompt_id] = true;
+    showToast('Duplicate will only be added to training data');
+    updateCorrectButtonState();
+    return;
+  }
+  if (isDuplicateTraining && state.duplicateConfirmations[payload.prompt_id]) {
+    payload.training_duplicate = true;
+  } else if (!isDuplicateTraining && state.duplicateConfirmations[payload.prompt_id]) {
+    delete state.duplicateConfirmations[payload.prompt_id];
+  }
   el.correctButton.disabled = true;
   try {
     const response = await fetchJSON('/api/logs/label', {
@@ -2883,7 +3042,9 @@ async function submitCorrection() {
     state.latestConfirmed = response.record;
     persistLatestConfirmed();
     renderLatestConfirmed();
-    showToast('Action triggered');
+    const toastMessage = payload.training_duplicate ? 'Duplicate added to training data' : 'Action triggered';
+    showToast(toastMessage);
+    delete state.duplicateConfirmations[payload.prompt_id];
     if (Array.isArray(response.updated_stores) && response.updated_stores.length) {
       await Promise.all(response.updated_stores.map((store) => loadStore(store)));
     }
@@ -2913,6 +3074,7 @@ async function deletePendingPrompt(item) {
     if (state.selectedPromptId === item.prompt_id) {
       resetSelection();
     }
+    delete state.duplicateConfirmations[item.prompt_id];
     await loadPending();
   } catch (err) {
     showToast(err.message || 'Deletion failed', 'error');
@@ -3014,6 +3176,198 @@ function renderStats() {
     el.statsClassifier.textContent = state.classifier.length ?? 0;
   }
   renderPendingMeta();
+  renderGovernanceStats();
+  updateNotifications();
+}
+
+function renderGovernanceStats() {
+  const stats = state.stats || {};
+  if (el.governancePolicyVersion) {
+    el.governancePolicyVersion.textContent = stats.policy_version || '—';
+  }
+  if (el.governanceAllowedTools) {
+    const tools = Array.isArray(stats.allowed_tools) ? stats.allowed_tools : [];
+    el.governanceAllowedTools.textContent = tools.length ? tools.join(', ') : '—';
+  }
+  if (el.governanceAllowedModels) {
+    const models = Array.isArray(stats.allowed_models) ? stats.allowed_models : [];
+    el.governanceAllowedModels.textContent = models.length ? models.join(', ') : '—';
+  }
+  if (el.governanceLastPurge) {
+    const formatted = formatTimestamp(stats.last_purge_timestamp) || 'Never';
+    el.governanceLastPurge.textContent = formatted;
+  }
+  if (el.governanceAvgLatency) {
+    const latency =
+      typeof stats.avg_latency_ms === 'number' ? `${stats.avg_latency_ms.toFixed(1)} ms` : '—';
+    el.governanceAvgLatency.textContent = latency;
+  }
+  if (el.governanceViolationCount) {
+    const count = stats.policy_violation_count || 0;
+    el.governanceViolationCount.textContent = count;
+    el.governanceViolationCount.classList.toggle('warning', count > 0);
+  }
+  if (el.governanceViolationList) {
+    el.governanceViolationList.innerHTML = '';
+    const violations = Array.isArray(stats.policy_violation_samples)
+      ? stats.policy_violation_samples
+      : [];
+    if (!violations.length) {
+      const li = document.createElement('li');
+      li.textContent = 'No recent policy violations.';
+      el.governanceViolationList.appendChild(li);
+    } else {
+      violations.forEach((entry) => {
+        const li = document.createElement('li');
+        const timestamp = formatTimestamp(entry.timestamp) || 'Unknown time';
+        const reason = entry.reason || 'policy_violation';
+        const tool = entry.tool || 'unknown tool';
+        li.textContent = `${timestamp} • ${tool} • ${reason}`;
+        el.governanceViolationList.appendChild(li);
+      });
+    }
+  }
+  if (el.retentionTableBody) {
+    el.retentionTableBody.innerHTML = '';
+    const retention = stats.retention_limits || {};
+    const entries = Object.entries(retention);
+    if (!entries.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 2;
+      cell.textContent = 'No retention rules configured.';
+      row.appendChild(cell);
+      el.retentionTableBody.appendChild(row);
+    } else {
+      entries.forEach(([bucket, value]) => {
+        const row = document.createElement('tr');
+        const bucketCell = document.createElement('td');
+        bucketCell.textContent = bucket;
+        const valueCell = document.createElement('td');
+        valueCell.textContent = value;
+        row.appendChild(bucketCell);
+        row.appendChild(valueCell);
+        el.retentionTableBody.appendChild(row);
+      });
+    }
+  }
+  if (el.governanceIntentCounts) {
+    el.governanceIntentCounts.innerHTML = '';
+    const counts = stats.daily_intent_counts || {};
+    const entries = Object.entries(counts);
+    if (!entries.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 2;
+      cell.textContent = 'No recent activity.';
+      row.appendChild(cell);
+      el.governanceIntentCounts.appendChild(row);
+    } else {
+      entries.forEach(([date, intents]) => {
+        const row = document.createElement('tr');
+        const dateCell = document.createElement('td');
+        dateCell.textContent = date;
+        const detailCell = document.createElement('td');
+        const summary = Object.entries(intents)
+          .map(([intent, count]) => `${intent}:${count}`)
+          .join(', ');
+        detailCell.textContent = summary || '–';
+        row.appendChild(dateCell);
+        row.appendChild(detailCell);
+        el.governanceIntentCounts.appendChild(row);
+      });
+    }
+  }
+  const evalResults = stats.eval_results || {};
+  if (el.governanceEvalIntent) {
+    const pct =
+      typeof evalResults.intent_accuracy === 'number'
+        ? `${(evalResults.intent_accuracy * 100).toFixed(1)}%`
+        : '—';
+    el.governanceEvalIntent.textContent = `Intent: ${pct}`;
+  }
+  if (el.governanceEvalAction) {
+    const pct =
+      typeof evalResults.action_accuracy === 'number'
+        ? `${(evalResults.action_accuracy * 100).toFixed(1)}%`
+        : '—';
+    el.governanceEvalAction.textContent = `Action: ${pct}`;
+  }
+}
+
+function updateNotifications() {
+  const notifications = [];
+  const stats = state.stats || {};
+  // Purge reminder
+  const purgeTimestamp = stats.last_purge_timestamp ? Date.parse(stats.last_purge_timestamp) : null;
+  const purgeThresholdMs = PURGE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  let purgeSignature = purgeTimestamp || 0;
+  if (!purgeTimestamp || Date.now() - purgeTimestamp > purgeThresholdMs) {
+    const lastSignature = Number(localStorage.getItem(STORAGE_KEYS.LAST_PURGE_ALERT_SIGNATURE)) || 0;
+    if (purgeSignature !== lastSignature) {
+      notifications.push({
+        reason: purgeTimestamp
+          ? `Last governance purge was more than ${PURGE_MAX_AGE_DAYS} days ago.`
+          : 'Governance purge has never been recorded.',
+        command: 'python -m app.governance_tasks purge --config config/governance.yml',
+        key: 'purge',
+      });
+      localStorage.setItem(STORAGE_KEYS.LAST_PURGE_ALERT_SIGNATURE, String(purgeSignature));
+    }
+  }
+
+  // Training reminder
+  const correctedCount = stats.corrected_count || 0;
+  const lastTrainingCount =
+    Number(localStorage.getItem(STORAGE_KEYS.LAST_TRAINING_ALERT_COUNT)) || 0;
+  if (correctedCount - lastTrainingCount >= TRAINING_ALERT_INCREMENT) {
+    notifications.push({
+      reason: `Another ${TRAINING_ALERT_INCREMENT} labeled prompts were added.`,
+      command:
+        'python -m app.train_intent_classifier --input data_pipeline/nlu_training_bucket/labeled_prompts.jsonl --output models/intent_classifier.pkl',
+      key: 'training',
+    });
+    localStorage.setItem(STORAGE_KEYS.LAST_TRAINING_ALERT_COUNT, String(correctedCount));
+  }
+
+  state.notifications = notifications;
+  renderNotifications();
+}
+
+function renderNotifications() {
+  if (!el.notificationsList) return;
+  el.notificationsList.innerHTML = '';
+  if (!state.notifications.length) {
+    const empty = document.createElement('li');
+    empty.className = 'notification-empty';
+    empty.textContent = 'No pending CLI actions.';
+    el.notificationsList.appendChild(empty);
+    return;
+  }
+  state.notifications.forEach((notification) => {
+    const item = document.createElement('li');
+    item.className = 'notification-item';
+    const reason = document.createElement('p');
+    reason.className = 'notification-reason';
+    reason.textContent = notification.reason;
+    const command = document.createElement('p');
+    command.className = 'notification-command';
+    command.textContent = notification.command;
+    const dismissButton = document.createElement('button');
+    dismissButton.type = 'button';
+    dismissButton.className = 'button ghost';
+    dismissButton.textContent = 'Dismiss';
+    dismissButton.addEventListener('click', () => dismissNotification(notification.key));
+    item.appendChild(reason);
+    item.appendChild(command);
+    item.appendChild(dismissButton);
+    el.notificationsList.appendChild(item);
+  });
+}
+
+function dismissNotification(key) {
+  state.notifications = state.notifications.filter((entry) => entry.key !== key);
+  renderNotifications();
 }
 
 // WHAT: helper to sort arrays descending by timestamp-like keys.
@@ -3421,6 +3775,9 @@ function wireEvents() {
   el.refreshButton?.addEventListener('click', () =>
     Promise.all([loadStats(), loadPending(true), loadClassifier(), loadCorrected(), refreshStores()]),
   );
+  el.reviewerButton?.addEventListener('click', () => {
+    promptForReviewerId();
+  });
   el.dataRefresh?.addEventListener('click', () => refreshStores([state.activeDataTab]));
 
   el.todoForm?.addEventListener('submit', async (event) => {
@@ -3578,6 +3935,7 @@ function wireEvents() {
 // WHY: ensures listeners, cached state, initial data, and periodic refreshes are ready before reviewers interact.
 // HOW: wire events, restore stored UI state, fetch intents/stats/pending items, and start the auto-refresh interval.
 async function bootstrap() {
+  ensureReviewerId();
   wireEvents();
   setChatStatus('Ready');
   window.scrollTo(0, 0);

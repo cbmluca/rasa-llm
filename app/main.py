@@ -6,6 +6,7 @@ from app.config import (
     get_classifier_min_score,
     get_classifier_model_path,
     get_enabled_tools,
+    get_governance_path,
     get_llm_api_key,
     get_llm_model,
     get_nlu_threshold,
@@ -22,6 +23,7 @@ from core.llm_router import LLMRouter
 from core.nlu_service import NLUService
 from core.payload_builder import PayloadBuilder
 from core.orchestrator import Orchestrator
+from core.governance import GovernancePolicy
 from core.tool_registry import ToolRegistry
 from core.intent_classifier import IntentClassifier
 from core.conversation_memory import ConversationMemory
@@ -38,6 +40,7 @@ def build_orchestrator() -> Orchestrator:
     HOW: pull runtime configuration from ``app.config`` helpers and hand the
     resulting instances to ``core.orchestrator.Orchestrator``.
     """
+    policy = GovernancePolicy(get_governance_path())
     classifier = IntentClassifier(get_classifier_model_path())
     nlu = NLUService(
         get_nlu_threshold(),
@@ -62,10 +65,18 @@ def build_orchestrator() -> Orchestrator:
         patterns=get_log_redaction_patterns(),
         max_bytes=get_log_max_bytes(),
         backup_count=get_log_backup_count(),
+        governance_policy=policy,
     )
 
     memory = ConversationMemory(max_turns=10)
-    return Orchestrator(nlu=nlu, registry=registry, router=router, logger=logger, conversation_memory=memory)
+    return Orchestrator(
+        nlu=nlu,
+        registry=registry,
+        router=router,
+        logger=logger,
+        conversation_memory=memory,
+        governance_policy=policy,
+    )
 
 # -- Interactive CLI loop ------------------------------------------------------
 def main() -> None:

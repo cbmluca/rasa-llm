@@ -289,15 +289,11 @@ def _filter_allowed_sources(items: List[Dict[str, str]]) -> List[Dict[str, str]]
 
 
 # --- Execution logic -------------------------------------------------------
+    # WHAT: normalize the topic, hit NewsAPI/Google feeds, and bundle the best articles.
+    # WHY: Tier‑1’s news intent needs a deterministic tool so router fallbacks can reuse it.
+    # HOW: clean the topic text, query providers with retries, merge/sort stories, and return structured metadata for formatting.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Aggregate breaking news articles for the requested topic.
-
-    WHAT: query upstream providers (NewsAPI/Google) and summarize findings.
-    WHY: deterministic tool responses keep Tier‑1 reviewable and allow the
-    router to reuse the same path when a prompt is escalated.
-    HOW: normalize the topic, call the provider clients, and return both
-    formatted markdown + raw article payloads.
-    """
+    """Aggregate breaking news articles for the requested topic."""
     """Return curated headlines for the requested ``topic``."""
 
     message_text = payload.get("message")
@@ -333,8 +329,10 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
 
 
 # --- Formatting helpers ----------------------------------------------------
+    # WHAT: convert the structured news result into markdown for chat responses.
+    # WHY: reviewers/routers need consistent summaries regardless of the upstream provider.
+    # HOW: render the topic header, output bullet links, and handle empty states (including Danish fallback hints).
 def format_news_list(result: Dict[str, Any]) -> str:
-    """Format a list of stories returned by :func:`run`."""
 
     stories: List[Dict[str, str]] = result.get("stories", [])
     topic = result.get("topic", "the requested topic")

@@ -302,16 +302,10 @@ class TodoStore:
         atomic_write_json(self._storage_path, payload)
 
 
+    # WHAT: perform list/find/create/update/delete operations on the todo store.
+    # WHY: keeping all CRUD logic in one place prevents the UI/router/probes from duplicating behavior.
+    # HOW: normalize the action + payload, validate required fields, call `TodoStore`, and honor dry_run for staged corrections.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Tier‑3 todo tool shared by deterministic NLU and router fallbacks.
-
-    WHAT: execute list/find/create/update/delete semantics against the JSON
-    store.
-    WHY: centralizes validation + persistence so Tier‑1 never duplicates CRUD
-    logic in probes or UI code.
-    HOW: inspect the ``action`` field, normalize user payloads, and call
-    ``TodoStore`` helpers (optionally in dry-run mode for staged corrections).
-    """
 
     action = _normalize_action(payload.get("action"))
     store = TodoStore()
@@ -478,6 +472,9 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     return _error_response(action, "unsupported_action", f"Unsupported todo action '{action}'.")
 
 
+    # WHAT: convert structured todo tool results into short user-facing text.
+    # WHY: CLI/chat/routers reuse this summary instead of crafting their own strings.
+    # HOW: switch on the action, mention counts/matches, and include relevant fields (deadline/status/priority) where applicable.
 def format_todo_response(result: Dict[str, Any]) -> str:
     """Render a human-friendly summary for todo operations."""
 

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from core.learning_logger import LearningLogger, ReviewItem, TurnRecord
+from core.governance import GovernancePolicy
 from core.nlu_service import NLUService
 from core.orchestrator import Orchestrator
 from core.tool_registry import ToolRegistry
@@ -15,6 +16,9 @@ class StubRouter:
 
     def general_answer(self, message: str) -> str:
         return "From ChatGPT: fallback response."
+
+    def suggest_tool(self, message: str):
+        return None
 
 
 def test_learning_logger_writes_jsonl_records(tmp_path):
@@ -163,3 +167,38 @@ def test_log_rotation_respects_max_bytes(tmp_path):
     assert "hello 4" in active_text
     assert "hello 0" not in active_text
     assert "hello 3" in rotated_text
+
+
+def test_logger_applies_governance_policy_mask(tmp_path):
+    policy = GovernancePolicy.from_dict(
+        {
+            "policy_version": "gov-test",
+            "allowed_models": ["gpt-4o-mini"],
+            "allowed_tools": ["weather"],
+            "retention_max_entries": {"turn_logs": 200},
+            "reviewer_roles": [],
+            "pii_rules": [{"pattern": r"secret", "replacement": "[MASKED]"}],
+        }
+    )
+    turn_path = tmp_path / "turns.jsonl"
+    review_path = tmp_path / "review.jsonl"
+    logger = LearningLogger(
+        turn_log_path=turn_path,
+        review_log_path=review_path,
+        enabled=True,
+        redact=False,
+        governance_policy=policy,
+    )
+
+    record = TurnRecord.new(
+        user_text="secret value",
+        intent="test_intent",
+        confidence=0.9,
+        response_text="super secret",
+    )
+    logger.log_turn(record)
+
+    payload = json.loads(turn_path.read_text(encoding="utf-8").strip())
+    assert payload["governance_policy_version"] == "gov-test"
+    assert "[MASKED]" in payload["user_text"]
+    assert "[MASKED]" in payload["response_text"]

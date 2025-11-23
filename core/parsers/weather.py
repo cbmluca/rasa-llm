@@ -49,13 +49,17 @@ _CITY_STOP_WORDS = {
 }
 
 
+    # WHAT: detect whether a lowered utterance contains weather keywords.
+    # WHY: the orchestrator calls this before running the weather parser to avoid unnecessary work.
+    # HOW: use `contains_keyword` against the predefined keyword set.
 def matches(lowered: str) -> bool:
-    """Return True when the utterance clearly references weather terms."""
     return contains_keyword(lowered, WEATHER_KEYWORDS)
 
 
+    # WHAT: produce a `CommandResult` with city/time hints for the weather tool.
+    # WHY: keeps routing deterministic by extracting structured entities before hitting the LLM.
+    # HOW: populate the payload with message/domain, call `_extract_city` and `_extract_time_hint`, and set confidence based on city detection.
 def parse(message: str) -> Optional[CommandResult]:
-    """Extract city/time hints so the weather tool can run deterministically."""
     payload: Dict[str, object] = {"message": message, "domain": "weather"}
     city = _extract_city(message)
     if city:
@@ -69,8 +73,10 @@ def parse(message: str) -> Optional[CommandResult]:
     return CommandResult(tool="weather", payload=payload, confidence=confidence)
 
 
+    # WHAT: pull a probable city name out of the free-form message.
+    # WHY: allows prompts like “weather in Berlin” to resolve without structured entities.
+    # HOW: run regexes for prepositions/keywords, strip stop words, and block obviously invalid targets.
 def _extract_city(message: str) -> Optional[str]:
-    """Scan for city tokens after prepositions or before "weather" keywords."""
     for pattern in (_CITY_PREP_PATTERN, _CITY_BEFORE_KEYWORD_PATTERN):
         match = pattern.search(message)
         if not match:
@@ -87,8 +93,10 @@ def _extract_city(message: str) -> Optional[str]:
     return None
 
 
+    # WHAT: clean trailing weather/time words from the city fragment.
+    # WHY: geocoding fails when the city string includes “weather” or “today”.
+    # HOW: iteratively remove configured stop words and phrases, then trim punctuation.
 def _strip_city_stop_words(candidate: str) -> Optional[str]:
-    """Remove trailing stop words ("weather", day names) from city guesses."""
     chunk = candidate.strip(" ,;:!?")
     if not chunk:
         return None
@@ -104,8 +112,10 @@ def _strip_city_stop_words(candidate: str) -> Optional[str]:
     return chunk or None
 
 
+    # WHAT: trim phrases like “right now” or “this evening” from the candidate.
+    # WHY: `_strip_city_stop_words` needs help with multi-word endings.
+    # HOW: check known phrases and slice them off when present.
 def _remove_trailing_phrases(value: str) -> str:
-    """Trim phrases like "right now" from the city fragment."""
     phrases = (
         "right now",
         "right",
@@ -135,8 +145,10 @@ def _remove_trailing_phrases(value: str) -> str:
     return value
 
 
+    # WHAT: detect relative day/time hints in the utterance.
+    # WHY: the weather tool can only choose forecast slots when it knows the target time.
+    # HOW: use regexes for “tomorrow”, “at 9pm”, etc., parse hours/minutes, and stash a `raw` field for reference.
 def _extract_time_hint(message: str) -> Optional[Dict[str, object]]:
-    """Return structured time info (day/hour/minute) when present."""
     lowered = message.lower()
     rel_match = _RELATIVE_TIME_PATTERN.search(lowered)
     time_match = _TIME_PATTERN.search(lowered)
@@ -164,8 +176,10 @@ def _extract_time_hint(message: str) -> Optional[Dict[str, object]]:
     return hint
 
 
+    # WHAT: convert HH[:MM][AM/PM] strings into 24-hour integers.
+    # WHY: downstream parsing needs clean numbers to build ISO timestamps.
+    # HOW: split on “:”, cast to ints, and adjust for AM/PM when present.
 def _parse_time_components(time_value: str, ampm: Optional[str]) -> tuple[Optional[int], Optional[int]]:
-    """Normalize "10", "10:30pm" etc. into 24h components."""
     if not time_value:
         return None, None
 

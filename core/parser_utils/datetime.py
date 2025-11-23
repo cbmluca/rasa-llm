@@ -11,8 +11,10 @@ _DATE_PATTERN = re.compile(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}")
 _DATE_TEXT_PATTERN = re.compile(r"\d{1,2}\s*[A-Za-zÆØÅæøå]+\s+\d{2,4}", re.IGNORECASE)
 
 
+    # WHAT: scan a free-form message for the first recognizable date.
+    # WHY: many parsers (todo/calendar) infer deadlines from whatever date appears in the text.
+    # HOW: try dotted/slashed numeric patterns, textual dates, then fallback to token-by-token parsing via `parse_date_hint`.
 def find_date_in_text(message: str) -> Optional[str]:
-    """Extract the first recognized date from ``message`` as ISO string."""
 
     if not message:
         return None
@@ -31,8 +33,10 @@ def find_date_in_text(message: str) -> Optional[str]:
     return None
 
 
+    # WHAT: convert “tomorrow at 15” phrases into ISO timestamps.
+    # WHY: calendar/todo parsers need structured timestamps but users speak casually.
+    # HOW: call `parse_datetime_hint` and return the ISO string when successful.
 def parse_datetime_hint_local(text: str) -> Optional[str]:
-    """Convert casual datetime phrases into ISO timestamps for local use."""
     dt_value = parse_datetime_hint(text, default_time=None)
     return dt_value.isoformat() if dt_value else None
 

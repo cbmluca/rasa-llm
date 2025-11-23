@@ -9,13 +9,17 @@ from core.text_parsing import extract_quoted_strings
 from core.parsers.types import CommandResult
 
 
+    # WHAT: ensure prompts mention “app guide” or “knowledge” before parsing.
+    # WHY: avoids extra work when the utterance clearly targets another tool.
+    # HOW: simple substring checks.
 def matches(lowered: str) -> bool:
-    """Quick keyword check before running App Guide parsing heuristics."""
     return "app guide" in lowered or "knowledge" in lowered
 
 
+    # WHAT: map knowledge prompts to list/find/create/update/delete actions.
+    # WHY: App Guide entries are managed via chat, so we need deterministic parsing.
+    # HOW: look for verbs (delete/update/create/find), use quoted strings or “section …” phrasing to populate ids/titles/content.
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
-    """Infer App Guide CRUD actions from quoted ids/titles."""
     payload: Dict[str, object] = {"message": message, "domain": "knowledge"}
     quotes = extract_quoted_strings(message)
 
@@ -75,8 +79,10 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
     return CommandResult(tool="app_guide", payload=payload)
 
 
+    # WHAT: pull a section identifier when the user didn’t quote it.
+    # WHY: `find`/`delete` commands often refer to “section Budget sync” without quotes.
+    # HOW: use `extract_after_keywords` and return the first token.
 def _extract_section_identifier(message: str) -> Optional[str]:
-    """Fallback when no quoted section id is provided."""
     section = extract_after_keywords(message, ["for", "about", "section"])
     if section:
         tokens = section.split()

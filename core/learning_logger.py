@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, IO, Iterable, Optional, Pattern
 
+from core.governance import GovernancePolicy
+
 
 _KNOWN_PATTERNS: Dict[str, Pattern[str]] = {
     "email": re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
@@ -46,14 +48,25 @@ _REDACT_FIELDS = {
 
 
 def _utc_now() -> str:
-    """Return an ISO-8601 string for the current UTC timestamp."""
+    """WHAT: produce ISO-8601 UTC timestamps for log records.
+
+    WHY: turn/review entries rely on consistent timestamps for ordering,
+    cross-service correlation, and UI display.
+    HOW: wrap ``datetime.now(tz=UTC).isoformat()`` so call sites stay concise.
+    """
 
     return datetime.now(tz=timezone.utc).isoformat()
 
 
 @dataclass
 class TurnRecord:
-    """Capture the structured details of a single conversational turn."""
+    """WHAT: structured schema for a single orchestrated turn.
+
+    WHY: Tier‑2 logs must capture intent/confidence/entities/tools/extras so
+    Tier‑5 reviewers and analytics scripts can replay any decision.
+    HOW: dataclass storing immutable turn attributes, plus ``new`` factory to
+    auto-populate timestamps without leaking ``datetime`` to call sites.
+    """
 
     timestamp: str
     user_text: str
@@ -90,7 +103,13 @@ class TurnRecord:
         metadata: Dict[str, Any] | None = None,
         extras: Dict[str, Any] | None = None,
     ) -> "TurnRecord":
-        """Factory helper that auto-populates the timestamp."""
+        """WHAT: convenience constructor that injects timestamps + defaults.
+
+        WHY: orchestrator callers only know the runtime data; adding consistent
+        timestamps centrally keeps logging uniform.
+        HOW: call the dataclass constructor with ``_utc_now`` outputs and
+        fallback dicts for optional fields.
+        """
 
         return cls(
             timestamp=_utc_now(),
@@ -113,7 +132,13 @@ class TurnRecord:
 
 @dataclass
 class ReviewItem:
-    """Flag a turn that needs manual review or future retraining."""
+    """WHAT: schema for pending review items generated per turn.
+
+    WHY: only a subset of turns enter the Tier‑5 queue; capturing intent,
+    reason, payload, and metadata lets reviewers triage quickly.
+    HOW: dataclass similar to ``TurnRecord`` with an auxiliary ``new`` helper
+    that stamps timestamps automatically.
+    """
 
     timestamp: str
     user_text: str
@@ -140,7 +165,12 @@ class ReviewItem:
         prompt_id: Optional[str] = None,
         parser_payload: Dict[str, Any] | None = None,
     ) -> "ReviewItem":
-        """Factory helper that auto-populates the timestamp."""
+        """WHAT: helper constructor mirroring ``TurnRecord.new`` semantics.
+
+        WHY: orchestrator code should stay declarative when emitting review
+        items; this keeps timestamp formatting centralized.
+        HOW: instantiate ``ReviewItem`` with ``_utc_now`` + provided payloads.
+        """
 
         return cls(
             timestamp=_utc_now(),
@@ -157,7 +187,13 @@ class ReviewItem:
 
 
 class LearningLogger:
-    """JSONL writer for turn transcripts and review queues."""
+    """WHAT: central JSONL logger for turns + review items.
+
+    WHY: Tier‑1/Tier‑5 observability hinges on consistent JSON schema, redacted
+    PII, and bounded log files.
+    HOW: accept file paths + redaction/rotation settings, expose ``log_turn``
+    and ``log_review_item`` helpers, and encapsulate write/rotation logic.
+    """
 
     def __init__(
         self,
@@ -169,6 +205,7 @@ class LearningLogger:
         patterns: Iterable[str] | None = None,
         max_bytes: int = 0,
         backup_count: int = 0,
+        governance_policy: Optional[GovernancePolicy] = None,
     ) -> None:
         self._turn_log_path = turn_log_path
         self._review_log_path = review_log_path
@@ -176,6 +213,8 @@ class LearningLogger:
         self._redact = redact
         self._max_bytes = max_bytes
         self._backup_count = backup_count
+        self._governance_policy = governance_policy
+        self._policy_version = governance_policy.policy_version if governance_policy else None
         selected = tuple(patterns) if patterns else _KNOWN_PATTERNS.keys()
         self._redaction_patterns = [
             (key, _KNOWN_PATTERNS[key])
@@ -185,24 +224,43 @@ class LearningLogger:
         self._redaction_patterns.sort(key=lambda item: _PATTERN_PRIORITY.get(item[0], 10))
 
     def log_turn(self, record: TurnRecord) -> None:
-        """Append the turn JSON to ``turn_log_path`` (after optional redaction)."""
+        """WHAT: persist a turn record to ``turn_log_path``.
+
+        WHY: every turn should be traceable for audits; logging is gated by
+        ``enabled`` so dev/test runs can disable it.
+        HOW: exit early when disabled, otherwise serialize the dataclass and
+        delegate to ``_append_json_line`` (which handles redaction/rotation).
+        """
 
         if not self._enabled:
             return
         self._append_json_line(self._turn_log_path, asdict(record))
 
     def log_review_item(self, review: ReviewItem) -> None:
-        """Append review items so Tier‑5 can load them later."""
+        """WHAT: persist review queue rows to ``review_log_path``.
+
+        WHY: the pending queue importer scans this file to seed Tier‑5 tickets.
+        HOW: same as ``log_turn``—skip when disabled, otherwise append JSONL.
+        """
 
         if not self._enabled:
             return
         self._append_json_line(self._review_log_path, asdict(review))
 
     def _append_json_line(self, path: Path, payload: Dict[str, Any]) -> None:
-        """Serialize a payload as newline-delimited JSON."""
+        """WHAT: write payloads as newline-delimited JSON with rotation.
+
+        WHY: centralizing the write ensures redaction + log rotation happen for
+        every record regardless of caller.
+        HOW: ensure directories exist, scrub/redact fields, encode to UTF-8,
+        rotate if size limits are exceeded, and append to the file.
+        """
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        prepared = self._prepare_payload(payload)
+        working = dict(payload)
+        if self._policy_version:
+            working.setdefault("governance_policy_version", self._policy_version)
+        prepared = self._prepare_payload(working)
         line = json.dumps(prepared, ensure_ascii=False)
         encoded = line.encode("utf-8")
         self._rotate_if_needed(path, len(encoded) + 1)
@@ -216,11 +274,24 @@ class LearningLogger:
 
     @property
     def enabled(self) -> bool:
-        """Expose the logger state for callers that need quick checks."""
+        """WHAT: report whether logging is currently enabled.
+
+        WHY: orchestrator callers occasionally skip expensive prep when logging
+        is off; this property gives them a cheap check.
+        HOW: return the stored boolean flag.
+        """
 
         return self._enabled
 
     def _prepare_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """WHAT: redact sensitive fields before writing to disk.
+
+        WHY: logs may leave the machine for analytics; removing emails/IDs keeps
+        us compliant with storage policies.
+        HOW: walk the payload dict, scrubbing configured fields recursively via
+        ``_scrub_value`` when redaction is enabled.
+        """
+        payload = self._apply_policy_mask(payload)
         if not self._redact or not self._redaction_patterns:
             return payload
 
@@ -232,7 +303,20 @@ class LearningLogger:
                 redacted[key] = value
         return redacted
 
+    def _apply_policy_mask(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply governance-driven PII masking before optional redaction."""
+        if not self._governance_policy:
+            return payload
+        return self._governance_policy.mask_pii(payload)
+
     def _scrub_value(self, value: Any) -> Any:
+        """WHAT: recursively redact nested values (dict/list/tuple/str).
+
+        WHY: sensitive data can be nested inside payloads; recursion ensures we
+        don't miss fields hidden inside extras/tool payloads.
+        HOW: branch on container types and delegate to ``_scrub_string`` for
+        leaf strings, returning the value unchanged otherwise.
+        """
         if isinstance(value, dict):
             return {key: self._scrub_value(val) for key, val in value.items()}
         if isinstance(value, list):
@@ -244,6 +328,13 @@ class LearningLogger:
         return value
 
     def _scrub_string(self, value: str) -> str:
+        """WHAT: replace sensitive substrings (emails, cards) with tokens.
+
+        WHY: PII often lives in user prompts/responses; replacing patterns with
+        `[REDACTED_*]` keeps structure while hiding details.
+        HOW: iterate configured regex patterns by priority and run ``sub`` with
+        deterministic token names.
+        """
         sanitized = value
         for key, pattern in self._redaction_patterns:
             token = f"[REDACTED_{key.upper()}]"
@@ -251,6 +342,13 @@ class LearningLogger:
         return sanitized
 
     def _rotate_if_needed(self, path: Path, incoming_bytes: int) -> None:
+        """WHAT: enforce max log sizes with optional rotation.
+
+        WHY: Tier‑1 can run indefinitely; unbounded JSONL files would exhaust
+        disk space and slow downstream tooling.
+        HOW: compare file size + incoming bytes against the configured limit,
+        delete or rotate to numbered backups based on ``backup_count``.
+        """
         if self._max_bytes <= 0:
             return
         if not path.exists():

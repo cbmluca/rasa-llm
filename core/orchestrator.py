@@ -28,6 +28,7 @@ from tools.news_tool import format_news_list
 from tools.todo_list_tool import format_todo_response
 from tools.app_guide_tool import format_app_guide_response
 from tools.weather_tool import format_weather_response
+from core.governance import GovernancePolicy, GovernancePolicyViolation
 
 
 _FORMATTERS = {
@@ -79,14 +80,18 @@ class Orchestrator:
         router: LLMRouter,
         logger: Optional[LearningLogger] = None,
         conversation_memory: Optional[ConversationMemory] = None,
+        governance_policy: Optional[GovernancePolicy] = None,
     ) -> None:
         self._nlu = nlu
         self._registry = registry
         self._router = router
         self._logger = logger
         self._conversation_memory = conversation_memory or ConversationMemory()
+        self._governance_policy = governance_policy
 
-    # --- Tool response normalization: keep user replies consistent across tools
+    # WHAT: normalize raw tool payloads into readable text responses.
+    # WHY: keeps CLI/chat replies consistent regardless of which tool generated the payload.
+    # HOW: look up the formatter registered for the tool and fallback to `str(result)` when none exists.
     def _format_tool_response(self, tool_name: str, result: Dict[str, object]) -> str:
         """Normalize raw tool payloads into readable strings for chat/CLI."""
         formatter = _FORMATTERS.get(tool_name)
@@ -94,18 +99,27 @@ class Orchestrator:
             return str(result)
         return formatter(result)
 
-    # --- Tool execution bridge: isolates registry lookup from call sites
+    # WHAT: look up a tool in the registry and return both structured + human responses.
+    # WHY: callers shouldn’t repeat registry plumbing; this helper centralizes logging metadata.
+    # HOW: invoke `ToolRegistry.run_tool`, then pass the result to `_format_tool_response`.
     def _run_tool(self, tool_name: str, payload: Dict[str, object], *, dry_run: bool = False) -> tuple[Dict[str, object], str]:
         """Invoke a registry tool and return both the structured and human output."""
+        self._ensure_tool_allowed(tool_name)
         result = self._registry.run_tool(tool_name, payload, dry_run=dry_run)
         return result, self._format_tool_response(tool_name, result)
 
+    # WHAT: public tool runner for endpoints (e.g., training API) that need raw results.
+    # WHY: keeps FastAPI routers from touching `_run_tool` internals or formatters.
+    # HOW: delegate to `_run_tool` and drop the formatted string.
     def run_tool(self, tool_name: str, payload: Dict[str, object], *, dry_run: bool = False) -> Dict[str, object]:
         """Public helper for API callers that only need the structured tool result."""
 
         result, _ = self._run_tool(tool_name, payload, dry_run=dry_run)
         return result
 
+    # WHAT: decide whether a tool run should be staged (dry-run) instead of mutating stores.
+    # WHY: Tier‑5 reviewers approve mutations; we shouldn’t persist create/update/delete until they confirm.
+    # HOW: check the normalized `action` and call `is_mutating_action` from the store config.
     def _should_dry_run(self, tool_name: Optional[str], payload: Optional[Dict[str, object]]) -> bool:
         """Decide if a tool execution should be staged (no persistent mutation)."""
         if not tool_name or not payload:
@@ -113,6 +127,9 @@ class Orchestrator:
         action = str(payload.get("action") or "").strip().lower()
         return is_mutating_action(tool_name, action)
 
+    # WHAT: enrich the extras metadata with domain/action breadcrumbs from the tool result.
+    # WHY: downstream logs/dashboards rely on this metadata to filter by domain or action.
+    # HOW: inspect the result dict, default to `_TOOL_DOMAINS`, and store action strings under `<tool>_action`.
     def _apply_tool_metadata(
         self,
         extras: Dict[str, Any],
@@ -137,6 +154,34 @@ class Orchestrator:
                 metadata[f"{tool_name}_action"] = action
         return metadata
 
+    def _ensure_tool_allowed(self, tool_name: str) -> None:
+        """Raise when the governance policy forbids the requested tool."""
+        if not self._governance_policy:
+            return
+        self._governance_policy.ensure_tool_allowed(tool_name)
+
+    def _attach_policy_metadata(self, extras: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure extras always include the active policy version."""
+        if not self._governance_policy:
+            return extras
+        extras = dict(extras or {})
+        extras.setdefault("policy_version", self._governance_policy.policy_version)
+        return extras
+
+    def _apply_policy_violation_metadata(
+        self,
+        extras: Dict[str, Any],
+        violation: GovernancePolicyViolation,
+    ) -> Dict[str, Any]:
+        """Record structured policy violation details for logs/UI."""
+        metadata = dict(extras or {})
+        metadata["policy_version"] = violation.policy_version
+        metadata["policy_violation"] = violation.to_metadata()
+        return metadata
+
+    # WHAT: run keyword probes to convert fuzzy router hints into deterministic CRUD payloads.
+    # WHY: lets Tier‑1 auto-fill find/list actions without routing everything through the LLM.
+    # HOW: call `run_tool_probe`, mutate the payload for find/list decisions, stash metadata, or return a fallback response when nothing matches.
     def _maybe_apply_probe(
         self,
         tool_name: str,
@@ -144,15 +189,7 @@ class Orchestrator:
         payload: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        """Run keyword probes to auto-convert fuzzy router decisions into CRUD calls.
-
-        WHAT: see if deterministic store probes can service the request before we
-        rely on an LLM answer.
-        WHY: captures asserted entities for training and avoids duplicate
-        implementations of list/find logic.
-        HOW: when matches exist we rewrite the payload into find/list and stash
-        probe metadata; otherwise we surface a friendly fallback message.
-        """
+        """Run keyword probes to auto-convert fuzzy router decisions into CRUD calls."""
         candidates = {"kitchen_tips", "todo_list", "calendar_edit", "app_guide"}
         if tool_name not in candidates:
             return None
@@ -183,6 +220,9 @@ class Orchestrator:
             "review_reason": "keyword_probe_no_match",
         }
 
+    # WHAT: let the LLM router suggest a tool payload when deterministic parsing failed.
+    # WHY: fallback prompts (“I need a kitchen tip…”) can still be serviced without a manual correction.
+    # HOW: ask the router for a tool name, run probes for CRUD tools, then execute the tool in dry-run mode when appropriate.
     def _handle_router_hint(
         self,
         message: str,
@@ -227,6 +267,20 @@ class Orchestrator:
                 "fallback_triggered": False,
                 "review_reason": None,
                 "extras": updated_extras,
+            }
+        except GovernancePolicyViolation as violation:
+            violation_extras = self._apply_policy_violation_metadata(extras, violation)
+            return {
+                "response_text": violation.user_message,
+                "tool_name": hint_tool,
+                "tool_payload": payload,
+                "tool_result": None,
+                "tool_success": False,
+                "resolution_status": "policy_violation",
+                "fallback_triggered": False,
+                "review_reason": "policy_violation",
+                "metadata": {"policy_violation": violation.to_metadata()},
+                "extras": violation_extras,
             }
         except Exception as exc:  # pragma: no cover - defensive guard
             return {
@@ -279,6 +333,7 @@ class Orchestrator:
         metadata: Dict[str, Any] | None = None
         extras: Dict[str, Any] = self._nlu.build_metadata(nlu_result)
         extras["resolved_intent"] = nlu_result.intent
+        extras = self._attach_policy_metadata(extras)
         review_reason: Optional[str] = None
 
         router_needed = False
@@ -321,6 +376,13 @@ class Orchestrator:
                             extras["staged"] = True
                         tool_success = True
                         resolution_status = "tool:nlu"
+                    except GovernancePolicyViolation as violation:
+                        tool_success = False
+                        response_text = violation.user_message
+                        extras = self._apply_policy_violation_metadata(extras, violation)
+                        resolution_status = "policy_violation"
+                        review_reason = "policy_violation"
+                        metadata = {"policy_violation": violation.to_metadata()}
                     except Exception as exc:
                         tool_success = False
                         resolution_status = "tool_error"
@@ -374,6 +436,13 @@ class Orchestrator:
                                     extras["staged"] = True
                                 tool_success = True
                                 resolution_status = "tool:router"
+                            except GovernancePolicyViolation as violation:
+                                tool_success = False
+                                response_text = violation.user_message
+                                extras = self._apply_policy_violation_metadata(extras, violation)
+                                resolution_status = "policy_violation"
+                                review_reason = "policy_violation"
+                                metadata = {"policy_violation": violation.to_metadata()}
                             except Exception as exc:  # pragma: no cover - defensive guard
                                 tool_success = False
                                 resolution_status = "tool_error"
@@ -445,11 +514,12 @@ class Orchestrator:
             response_summary=response_summary,
         )
 
+    # WHAT: map parser intents (including legacy aliases) to registered tool names.
+    # WHY: keeps older datasets/experiments compatible even if the registry now uses canonical tool ids.
+    # HOW: check a small alias map first, then fall back to the registry’s advertised tool list.
     def _intent_to_tool(self, intent: str) -> Optional[str]:
         """Map legacy/alias intents to the tool name registered with Tier‑1."""
         mapping = {
-            "ask_weather": "weather",
-            "get_news": "news",
             "weather": "weather",
             "news": "news",
         }
@@ -460,6 +530,9 @@ class Orchestrator:
             return intent
         return None
 
+    # WHAT: persist turn + review logs for every handled message.
+    # WHY: Tier‑5 dashboards, export scripts, and training pipelines rely on a full audit trail.
+    # HOW: build `TurnRecord`/`ReviewItem` payloads from the current turn and ask `LearningLogger` to append them.
     def _emit_logs(
         self,
         message: str,
@@ -514,7 +587,9 @@ class Orchestrator:
             )
             self._logger.log_review_item(review)
 
+    # WHAT: patch a conversation history entry with the corrected payload after Tier‑5 review.
+    # WHY: lets the UI show historical context (e.g., related prompts) without re-running NLU.
+    # HOW: forward the update to `ConversationMemory`, which manages the in-memory history list.
     def update_conversation_payload(self, entry_id: Optional[str], payload: Optional[Dict[str, Any]]) -> None:
         """Persist the corrected payload for a past conversational turn."""
-
         self._conversation_memory.update_payload(entry_id, payload)

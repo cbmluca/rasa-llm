@@ -10,13 +10,17 @@ from core.text_parsing import extract_title_from_text
 from core.parsers.types import CommandResult
 
 
+    # WHAT: sniff for kitchen/tip keywords.
+    # WHY: the orchestrator uses this to decide whether to invoke the kitchen parser.
+    # HOW: simple substring checks to avoid heavy regex work when irrelevant.
 def matches(lowered: str) -> bool:
-    """Quick guard to avoid expensive parsing when no kitchen keywords exist."""
     return "kitchen" in lowered and "tip" in lowered
 
 
+    # WHAT: infer kitchen tip CRUD actions and build payloads for the tool.
+    # WHY: deterministic parsing keeps kitchen requests out of the router when clearly phrased.
+    # HOW: look for regex/pattern cues (create/list/find/delete/update) and populate titles/keywords/id/link fields.
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
-    """Detect kitchen tip CRUD intents and seed payloads for the tool layer."""
     payload: Dict[str, object] = {"message": message, "domain": "kitchen"}
 
     if re.search(r"add\s+(?:a\s+)?kitchen tip", lowered) or "create kitchen tip" in lowered or "via the form" in lowered:

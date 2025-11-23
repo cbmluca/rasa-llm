@@ -7,15 +7,10 @@ from typing import Any, Dict, List, Optional
 from knowledge.app_guide import AppGuideStore
 from core.tooling.query_helpers import best_effort_keywords, rank_entries, tokenize_keywords
 
+    # WHAT: handle list/find/create/update/delete for the App Guide knowledge store.
+    # WHY: keeping RAG-style knowledge in one tool prevents drift between router flows and reviewer corrections.
+    # HOW: normalize action aliases, resolve ids/titles/keywords, validate inputs, and call `AppGuideStore` with dry-run support.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """CRUD handler for the App Guide knowledge base.
-
-    WHAT: implement list/find/create/update/delete.
-    WHY: ensure both conversational probes and Tier‑5 reviewers mutate the same
-    canonical store logic.
-    HOW: resolve action aliases, normalize IDs/titles/keywords, and call the
-    ``AppGuideStore`` helpers with optional dry-run semantics.
-    """
 
     raw_action = str(payload.get("action", "list")).strip().lower() or "list"
     store = AppGuideStore()
@@ -141,8 +136,10 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     return _error(action, "unsupported_action", f"Knowledge action '{action}' is not supported.")
 
 
+    # WHAT: turn structured App Guide tool payloads into reviewer-facing text.
+    # WHY: ensures list/find/create/update/delete replies remain consistent across CLI, router, and Tier‑5.
+    # HOW: branch on action, include IDs/titles/content snippets, and fall back to friendly errors.
 def format_app_guide_response(result: Dict[str, Any]) -> str:
-    """Render user-visible responses for knowledge commands."""
 
     if "error" in result:
         return result.get("message", "Knowledge command failed.")

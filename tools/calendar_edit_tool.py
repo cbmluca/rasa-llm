@@ -216,15 +216,10 @@ class CalendarStore:
         return None
 
 
+    # WHAT: handle calendar list/find/create/update/delete actions.
+    # WHY: keeps datetime parsing, location defaults, and storage logic centralized for Tier‑1.
+    # HOW: normalize action aliases, parse ISO dates (with fallbacks), and call `CalendarStore`, honoring dry-run for staged approvals.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
-    """Calendar CRUD handler shared by the orchestrator and Tier‑5 UI.
-
-    WHAT: list, find, create, update, and delete calendar events.
-    WHY: ensures every conversational and reviewer action mutates the same
-    store logic (with dry-run staging for reviewer approvals).
-    HOW: normalize action aliases, validate/parse datetimes, and call the
-    ``CalendarStore`` helpers.
-    """
 
     action_raw = str(payload.get("action", "list")).strip().lower()
     action = _ACTION_ALIASES.get(action_raw, action_raw or "list")
@@ -382,8 +377,10 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     return _error_response(action, "unsupported_action", f"Unsupported calendar action '{action}'.")
 
 
+    # WHAT: convert structured calendar results into concise text updates.
+    # WHY: chat/CLI surfaces rely on this to keep human summaries consistent across actions.
+    # HOW: switch on action type, list events or mention created/updated/deleted entries, and reuse `_with_raw_output` when raw JSON is needed.
 def format_calendar_response(result: Dict[str, Any]) -> str:
-    """Render a short description of calendar operations."""
 
     if "error" in result:
         return _with_raw_output(result.get("message", "Calendar action failed."), result, include_raw=False)
