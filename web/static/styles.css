@@ -1173,6 +1173,10 @@ body {
   margin: 0;
 }
 
+.install-hint {
+  font-style: italic;
+}
+
 #voice-status {
   font-size: 0.75rem;
 }

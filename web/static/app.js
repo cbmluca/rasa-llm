@@ -85,7 +85,7 @@ function getFieldLabel(tool, field) {
 
 const TOOL_REQUIRED_FIELDS = {
   todo_list: ['title'],
-  calendar_edit: ['title', 'start'],
+  calendar_edit: ['title'],
   kitchen_tips: ['title', 'content'],
   app_guide: ['title', 'content'],
 };
@@ -122,7 +122,7 @@ const TOOL_ACTION_FIELD_CONFIG = {
   calendar_edit: {
     list: { fields: [], required: [] },
     find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'start', 'end', 'location', 'content', 'link'], required: ['title', 'start'] },
+    create: { fields: ['title', 'start', 'end', 'location', 'content', 'link'], required: ['title'] },
     delete: { fields: ['id', 'title'], required: ['id'] },
     update: { fields: ['id', 'title', 'start', 'end', 'location', 'content', 'link'], required: ['id'] },
   },
@@ -1159,18 +1159,27 @@ function restoreDataPanelState() {
   restoreSelectedDataRows();
 }
 
+function buildReviewerHeaders(base = {}) {
+  const headers = { ...(base || {}) };
+  const reviewerId = getReviewerId();
+  const reviewerToken = getReviewerToken();
+  if (reviewerId && !headers['X-Reviewer-ID']) {
+    headers['X-Reviewer-ID'] = reviewerId;
+  }
+  if (reviewerToken && !headers['X-Reviewer-Token']) {
+    headers['X-Reviewer-Token'] = reviewerToken;
+  }
+  return headers;
+}
+
 // WHAT: standardize AJAX calls with JSON parsing and friendly errors.
 // WHY: every frontend API call should share headers/logic so errors propagate consistently.
 // HOW: invoked by every `/api/...` call so it wraps `fetch`, parses success (incl. 204), and bubbles server detail strings when orchestration endpoints fail.
 async function fetchJSON(url, options = {}) {
-  const reviewerId = getReviewerId();
-  const headers = {
+  const headers = buildReviewerHeaders({
     'Content-Type': 'application/json',
     ...(options.headers || {}),
-  };
-  if (reviewerId) {
-    headers['X-Reviewer-ID'] = reviewerId;
-  }
+  });
   const response = await fetch(url, {
     headers,
     ...options,
@@ -1375,8 +1384,7 @@ async function uploadVoiceClip(blob) {
   const extension = blob.type.includes('mpeg') ? 'mp3' : 'webm';
   const formData = new FormData();
   formData.append('audio', blob, `clip-${Date.now()}.${extension}`);
-  const reviewerId = getReviewerId();
-  const headers = reviewerId ? { 'X-Reviewer-ID': reviewerId } : {};
+  const headers = buildReviewerHeaders();
   state.voice.uploading = true;
   setVoiceStatus('Transcribing…', 'info');
   setChatStatus('Transcribing…');
@@ -2469,7 +2477,9 @@ function applyFieldLayout(wrapper, intent, action, key) {
 // HOW: ensure the `state.datetimeInputs` cache has an entry for the field so multiple renders/edit handlers share the same draft date/time values.
 function ensureDateTimeState(field) {
   if (!state.datetimeInputs[field]) {
-    state.datetimeInputs[field] = { dateValue: '', timeValue: '' };
+    state.datetimeInputs[field] = { dateValue: '', timeValue: '', useDefaultTime: true };
+  } else if (typeof state.datetimeInputs[field].useDefaultTime === 'undefined') {
+    state.datetimeInputs[field].useDefaultTime = true;
   }
   return state.datetimeInputs[field];
 }
@@ -2509,20 +2519,46 @@ function applyDateTimeFieldValue(field, config) {
     }
     payload.raw = `${stateValue.dateValue || ''} ${stateValue.timeValue || ''}`.trim();
     state.correctionFields[field] = payload;
+    updateCorrectButtonState();
     return;
   }
   const dateInfo = parseDateInput(stateValue.dateValue, baseDate);
   if (!dateInfo.iso) {
     delete state.correctionFields[field];
+    updateCorrectButtonState();
     return;
   }
   if (config.mode === 'date' || !config.includeTime) {
     state.correctionFields[field] = dateInfo.iso;
+    updateCorrectButtonState();
     return;
   }
-  const timeInfo = parseTimeInput(stateValue.timeValue || config.defaultTime);
-  const timeValue = timeInfo.time || config.defaultTime;
+  const allowDefault = stateValue.useDefaultTime !== false && config.defaultTime;
+  const defaultTime = allowDefault ? config.defaultTime : '';
+  const timeSource = stateValue.timeValue || defaultTime || '';
+  const timeInfo = parseTimeInput(timeSource);
+  let timeValue = timeInfo.time || '';
+  if (!timeValue && stateValue.timeValue) {
+    timeValue = stateValue.timeValue.trim();
+  } else if (!timeValue && defaultTime) {
+    timeValue = defaultTime;
+  }
+  if (!timeValue) {
+    state.correctionFields[field] = dateInfo.iso;
+    stateValue.useDefaultTime = false;
+    updateCorrectButtonState();
+    return;
+  }
+  if (!stateValue.timeValue && defaultTime) {
+    stateValue.timeValue = defaultTime;
+    stateValue.useDefaultTime = true;
+  } else if (!stateValue.timeValue) {
+    stateValue.useDefaultTime = false;
+  } else {
+    stateValue.useDefaultTime = false;
+  }
   state.correctionFields[field] = `${dateInfo.iso}T${timeValue}`;
+  updateCorrectButtonState();
 }
 
 // WHAT: determine the reference date for relative parsing (prompt timestamp or now).
@@ -3083,6 +3119,7 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
   const baseDate = getBaseDate();
   const stateValue = ensureDateTimeState(field);
   const rawValue = state.correctionFields[field];
+  let hydratedFromPayload = false;
   if (!stateValue.dateValue && rawValue) {
     if (config.mode === 'weather') {
       let parsed = rawValue;
@@ -3119,12 +3156,17 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
         }
       }
     }
+    hydratedFromPayload = true;
   }
   if (!stateValue.dateValue && isRequired) {
     stateValue.dateValue = 'Today';
   }
   if (!stateValue.timeValue && config.includeTime && config.defaultTime && isRequired) {
     stateValue.timeValue = config.defaultTime;
+    stateValue.useDefaultTime = true;
+  }
+  if (hydratedFromPayload) {
+    stateValue.useDefaultTime = false;
   }
 
   const trackedWrappers = [];
@@ -3152,15 +3194,18 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
     });
     input.addEventListener('focus', () => {
       input.dataset.prevValue = input.value;
+      input.dataset.userEdited = 'false';
       input.value = '';
     });
     input.addEventListener('blur', () => {
-      if (!input.value && input.dataset.prevValue) {
+      if (!input.value && input.dataset.prevValue && input.dataset.userEdited !== 'true') {
         input.value = input.dataset.prevValue;
       }
       delete input.dataset.prevValue;
+      delete input.dataset.userEdited;
     });
     input.addEventListener('input', () => {
+      input.dataset.userEdited = 'true';
       stateValue.dateValue = input.value;
       applyDateTimeFieldValue(field, config);
       updateRequiredState();
@@ -3187,16 +3232,20 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
     });
     input.addEventListener('focus', () => {
       input.dataset.prevValue = input.value;
+      input.dataset.userEdited = 'false';
       input.value = '';
     });
     input.addEventListener('blur', () => {
-      if (!input.value && input.dataset.prevValue) {
+      if (!input.value && input.dataset.prevValue && input.dataset.userEdited !== 'true') {
         input.value = input.dataset.prevValue;
       }
       delete input.dataset.prevValue;
+      delete input.dataset.userEdited;
     });
     input.addEventListener('input', () => {
-      stateValue.timeValue = input.value || (isRequired ? config.defaultTime || '' : '');
+      input.dataset.userEdited = 'true';
+      stateValue.timeValue = input.value;
+      stateValue.useDefaultTime = false;
       applyDateTimeFieldValue(field, config);
       updateRequiredState();
     });
@@ -3758,12 +3807,19 @@ function updateCorrectButtonState() {
   const reviewerIntent = el.intentSelect?.value || '';
   const action = el.actionSelect?.value || '';
   const tool = reviewerIntent || state.selectedPrompt.intent;
+  const normalizedAction = normalizeActionName(tool, action);
+  const effectiveAction = normalizedAction || action;
   const requiredFields = (TOOL_REQUIRED_FIELDS[tool] || []).filter((field) =>
-    isFieldRequired(tool, action, field),
+    isFieldRequired(tool, effectiveAction, field),
   );
   const missingField = requiredFields.some((field) => !fieldHasValue(state.correctionFields[field]));
   const needsAction = getActionsForIntent(tool).length > 0;
-  const ready = Boolean(reviewerIntent && (!needsAction || action) && !missingField);
+  const needsCalendarTiming = tool === 'calendar_edit' && effectiveAction === 'create';
+  const hasCalendarTiming =
+    !needsCalendarTiming ||
+    fieldHasValue(state.correctionFields.start) ||
+    fieldHasValue(state.correctionFields.end);
+  const ready = Boolean(reviewerIntent && (!needsAction || action) && !missingField && hasCalendarTiming);
   el.correctButton.disabled = !ready;
   const actionKey = action.trim().toLowerCase();
   el.correctButton.textContent = MUTATING_ACTIONS.has(actionKey) ? 'Trigger' : 'Correct';
@@ -3960,6 +4016,12 @@ function gatherCorrectionPayload() {
       correctedPayload[key] = value;
     }
   });
+  const normalizedAction = normalizeActionName(reviewerIntent, action);
+  if (reviewerIntent === 'calendar_edit' && normalizedAction === 'create') {
+    if (!correctedPayload.start && correctedPayload.end) {
+      correctedPayload.start = correctedPayload.end;
+    }
+  }
   correctedPayload.intent = reviewerIntent;
   return {
     prompt_id: state.selectedPrompt.prompt_id,
@@ -4325,12 +4387,12 @@ function updateNotifications() {
   const lastTrainingCount =
     Number(localStorage.getItem(STORAGE_KEYS.LAST_TRAINING_ALERT_COUNT)) || 0;
   if (correctedCount - lastTrainingCount >= TRAINING_ALERT_INCREMENT) {
-    notifications.push({
-      reason: `Another ${TRAINING_ALERT_INCREMENT} labeled prompts were added.`,
-      command:
-        'python -m app.train_intent_classifier --input data_pipeline/nlu_training_bucket/labeled_prompts.jsonl --output models/intent_classifier.pkl',
-      key: 'training',
-    });
+      notifications.push({
+        reason: `Another ${TRAINING_ALERT_INCREMENT} labeled prompts were added.`,
+        command:
+          'python -m app.train_intent_classifier --labeled-path data_pipeline/nlu_training_bucket/labeled_prompts.jsonl --model-path models/intent_classifier.pkl --report-path reports/intent_classifier.json',
+        key: 'training',
+      });
     localStorage.setItem(STORAGE_KEYS.LAST_TRAINING_ALERT_COUNT, String(correctedCount));
   }
 
@@ -5286,6 +5348,16 @@ function getActiveCalendarAction() {
   return state.calendarCrud.activeAction === 'update' ? 'update' : 'create';
 }
 
+// WHAT: check if the calendar form currently includes any start/end timestamp.
+// WHY: calendar create flows can now accept either field, but at least one must be present.
+// HOW: reuse `fieldHasValue` so both ISO strings and natural-language hints count toward satisfying the requirement.
+function calendarHasTimingValue(formState) {
+  if (!formState || !formState.values) {
+    return false;
+  }
+  return fieldHasValue(formState.values.start) || fieldHasValue(formState.values.end);
+}
+
 function setCalendarCrudAction(action) {
   const normalized = action === 'update' ? 'update' : 'create';
   state.calendarCrud.activeAction = normalized;
@@ -5296,6 +5368,20 @@ function setCalendarCrudAction(action) {
   renderCalendarCrudForm();
 }
 
+// WHAT: clean up legacy calendar timing warnings.
+// WHY: we previously highlighted datetime fields; now we only need to ensure no stale classes linger after renders.
+// HOW: strip the helper class/data attribute from every datetime wrapper so only Title retains the required styling.
+function updateCalendarTimingHints(action) {
+  if (!el.calendarCrudGrid) return;
+  const wrappers = el.calendarCrudGrid.querySelectorAll('.datetime-field');
+  wrappers.forEach((wrapper) => {
+    wrapper.classList.remove('calendar-timing-required');
+    if (wrapper.dataset.calendarTimingRequired) {
+      delete wrapper.dataset.calendarTimingRequired;
+    }
+  });
+}
+
 function updateCalendarFormButtonState(action) {
   const button = el.calendarCrudSubmit;
   if (!button) return;
@@ -5303,7 +5389,9 @@ function updateCalendarFormButtonState(action) {
   const formState = getCalendarFormState(targetAction);
   const requiredFields = TOOL_ACTION_FIELD_CONFIG.calendar_edit?.[targetAction]?.required || [];
   const isValid = requiredFields.every((field) => fieldHasValue(formState.values[field]));
-  button.disabled = !isValid;
+  const hasTiming = targetAction === 'create' ? calendarHasTimingValue(formState) : true;
+  button.disabled = !(isValid && hasTiming);
+  updateCalendarTimingHints(targetAction);
 }
 
 function setCalendarFormValue(action, field, value, options = {}) {
@@ -5329,19 +5417,21 @@ function setCalendarFormValue(action, field, value, options = {}) {
 
 function splitCalendarDatetimeValue(value) {
   if (!value || typeof value !== 'string') {
-    return { date: '', time: '' };
+    return { date: '', time: '', useDefaultTime: false };
   }
   if (value.includes('T')) {
     const [datePart, timePart] = value.split('T');
     return {
       date: datePart || '',
       time: (timePart || '').slice(0, 5),
+      useDefaultTime: false,
     };
   }
   const parts = value.trim().split(/\s+/);
   return {
     date: parts[0] || '',
     time: parts.slice(1).join(' ') || '',
+    useDefaultTime: false,
   };
 }
 
@@ -5352,7 +5442,13 @@ function ensureCalendarDatetimeParts(action, field) {
   }
   if (!formState.datetime[field]) {
     const existingValue = formState.values[field];
-    formState.datetime[field] = splitCalendarDatetimeValue(typeof existingValue === 'string' ? existingValue : '');
+    if (typeof existingValue === 'string' && existingValue) {
+      formState.datetime[field] = splitCalendarDatetimeValue(existingValue);
+    } else {
+      formState.datetime[field] = { date: '', time: '', useDefaultTime: true };
+    }
+  } else if (typeof formState.datetime[field].useDefaultTime === 'undefined') {
+    formState.datetime[field].useDefaultTime = false;
   }
   return formState.datetime[field];
 }
@@ -5365,7 +5461,7 @@ function setCalendarDatetimeParts(formState, field, value) {
     delete formState.datetime[field];
     return;
   }
-  formState.datetime[field] = splitCalendarDatetimeValue(value);
+  formState.datetime[field] = { ...splitCalendarDatetimeValue(value), useDefaultTime: false };
 }
 
 function updateCalendarDatetimeValue(action, field) {
@@ -5378,9 +5474,12 @@ function updateCalendarDatetimeValue(action, field) {
     if (formState.display) {
       delete formState.display[field];
     }
+    if (formState.datetime) {
+      delete formState.datetime[field];
+    }
     return;
   }
-  const config = DATE_TIME_FIELD_CONFIG[field] || { includeTime: true, defaultTime: '09:00' };
+  const config = DATE_TIME_FIELD_CONFIG[field] || { includeTime: true };
   const dateInfo = parseDateInput(dateText, new Date());
   if (!dateInfo.iso) {
     const fallback = [dateText, timeText].filter(Boolean).join(' ').trim();
@@ -5404,16 +5503,35 @@ function updateCalendarDatetimeValue(action, field) {
     }
     return;
   }
-  const timeInfo = parseTimeInput(timeText || config.defaultTime || '');
-  const timeValue = timeInfo.time || config.defaultTime || timeText || '';
+  const allowDefault = parts.useDefaultTime !== false && config.defaultTime;
+  const defaultTime = allowDefault ? config.defaultTime : '';
+  const timeSource = timeText || defaultTime || '';
+  const timeInfo = parseTimeInput(timeSource);
+  let timeValue = timeInfo.time || '';
+  if (!timeValue && timeText) {
+    timeValue = timeText;
+  } else if (!timeValue && defaultTime) {
+    timeValue = defaultTime;
+  }
   if (!timeValue) {
     formState.values[field] = dateInfo.iso;
     if (formState.display) {
       formState.display[field] = formatDanishDateString(dateInfo.iso);
     }
+    parts.time = '';
+    parts.useDefaultTime = false;
     return;
   }
-  const isoValue = `${dateInfo.iso}T${timeValue}`;
+  if (!timeText && defaultTime) {
+    parts.time = defaultTime;
+    parts.useDefaultTime = true;
+  } else if (!timeText) {
+    parts.time = '';
+    parts.useDefaultTime = false;
+  } else {
+    parts.useDefaultTime = false;
+  }
+  const isoValue = timeValue.includes('T') ? timeValue : `${dateInfo.iso}T${timeValue}`;
   formState.values[field] = isoValue;
   if (formState.display) {
     formState.display[field] = formatDanishDateString(isoValue);
@@ -5453,7 +5571,11 @@ function buildCalendarDateTimeFields(action, field, required) {
     dateDatalist.appendChild(option);
   });
   dateInput.addEventListener('input', (event) => {
-    ensureCalendarDatetimeParts(action, field).date = event.target.value;
+    const bucket = ensureCalendarDatetimeParts(action, field);
+    bucket.date = event.target.value;
+    if (!bucket.date || !bucket.date.trim()) {
+      bucket.useDefaultTime = true;
+    }
     updateCalendarDatetimeValue(action, field);
     updateRequired();
     updateCalendarFormButtonState(action);
@@ -5487,7 +5609,9 @@ function buildCalendarDateTimeFields(action, field, required) {
       timeDatalist.appendChild(option);
     });
     timeInput.addEventListener('input', (event) => {
-      ensureCalendarDatetimeParts(action, field).time = event.target.value;
+      const bucket = ensureCalendarDatetimeParts(action, field);
+      bucket.time = event.target.value;
+      bucket.useDefaultTime = false;
       updateCalendarDatetimeValue(action, field);
       updateRequired();
       updateCalendarFormButtonState(action);
@@ -5633,6 +5757,9 @@ function buildCalendarPayload(action) {
       payload[key] = value;
     }
   });
+  if (action === 'create' && !payload.start && payload.end) {
+    payload.start = payload.end;
+  }
   return payload;
 }
 
@@ -6031,6 +6158,23 @@ function updateDataTabUI() {
   });
 }
 
+// WHAT: ensure a Data Store tab re-enters Create mode when coming from another store.
+// WHY: prevents stale selections from sticking when reviewers swap tabs, matching the Todos behavior.
+// HOW: delegate to the tool-specific action setter so it clears the remembered row and re-renders the form/table.
+function resetDataStoreEditor(store) {
+  if (store === 'todos') {
+    setTodoCrudAction('create');
+    return;
+  }
+  if (store === 'calendar') {
+    setCalendarCrudAction('create');
+    return;
+  }
+  if (store === 'kitchen_tips') {
+    setKitchenCrudAction('create');
+  }
+}
+
 function setActiveDataTab(target, options = {}) {
   const normalized = DATA_STORE_IDS.includes(target) ? target : 'todos';
   const { skipRefresh = false, persist = true, force = false } = options;
@@ -6038,10 +6182,11 @@ function setActiveDataTab(target, options = {}) {
   if (!force && previousTab === normalized) {
     return;
   }
+  const tabChanged = Boolean(previousTab && previousTab !== normalized);
   state.activeDataTab = normalized;
   updateDataTabUI();
-  if (normalized === 'todos' && previousTab && previousTab !== 'todos') {
-    setTodoCrudAction('create');
+  if (tabChanged) {
+    resetDataStoreEditor(normalized);
   }
   if (persist) {
     persistActiveDataTab();
@@ -6293,6 +6438,9 @@ function wireEvents() {
   el.reviewerButton?.addEventListener('click', () => {
     promptForReviewerId();
   });
+  el.reviewerTokenButton?.addEventListener('click', () => {
+    promptForReviewerToken();
+  });
   el.dataRefresh?.addEventListener('click', () => refreshStores([state.activeDataTab]));
 
   el.todoCrudForm?.addEventListener('submit', async (event) => {
@@ -6410,6 +6558,7 @@ function wireEvents() {
       const response = await fetch('/api/logs/import', {
         method: 'POST',
         body: formData,
+        headers: buildReviewerHeaders(),
       });
       if (!response.ok) {
         const payload = await response.json();
@@ -6476,6 +6625,7 @@ function wireEvents() {
 async function bootstrap() {
   restoreDataPanelState();
   ensureReviewerId();
+  ensureReviewerToken();
   disableAutofill();
   detectVoiceSupport();
   registerServiceWorker();

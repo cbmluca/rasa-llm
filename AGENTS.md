@@ -16,12 +16,14 @@
 - **Global parsing helpers**: Danish date/time parsing, natural-language title extraction, and normalization utilities live in `core/parser_utils` and `core/text_parsing`. Use them across tools so behaviors stay consistent.
 - **Shared storage helpers**: JSON-backed tools should rely on `core/json_storage` for atomic reads/writes. New stores should follow the same pattern (files under `data_pipeline/` plus a storage helper) instead of rolling ad hoc persistence.
 - **Logging & observability**: Every handled message writes a `TurnRecord` + optional `ReviewItem` via `LearningLogger`, with configurable redaction/rotation.
+- **Reviewer token auth**: All `/api/*` routes (except `/` and `/api/health`) require a secret `X-Reviewer-Token`. Configure it via `REVIEWER_TOKEN`, enforce it with `_require_reviewer_token`, and have the frontend persist/apply it via `buildReviewerHeaders`.
 - **Voice capture & STT**: The chat console surfaces a Chrome-only MediaRecorder button; successful clips hit `/api/speech`, which transcribes via Whisper (`SPEECH_TO_TEXT_MODEL`), forwards text into the orchestrator, appends records to `data_pipeline/voice_inbox.json`, and echoes `{transcription_status, text, pending_id}`. Media failures set a `mediaError` state so the UI hides the mic and guides reviewers back to text input.
-- **Frontend contract**: `web/static/index.html`, `styles.css`, and `app.js` keep panels persistent, hydrate queues/stores, and show toast notifications for async operations. The Todos and Calendar data stores now mirror the pending editor with sortable rows, inline delete buttons, and single create/update forms that switch into update mode when you click an existing row.
+- **Frontend contract**: `web/static/index.html`, `styles.css`, and `app.js` keep panels persistent, hydrate queues/stores, and show toast notifications for async operations. The Todos and Calendar data stores now mirror the pending editor with sortable rows, inline delete buttons, and single create/update forms that switch into update mode when you click an existing row. Switching into the Todos, Calendar, or Kitchen Tips tabs from another store always drops you back into Create mode and clears the highlighted row so edits never start from a stale selection, while staying on the same tab keeps the remembered selection and prefilled edit card. Calendar create flows (Pending corrections + Data Stores) enforce “Title + either Start or End” and copy End → Start when only an end time is provided so backend constraints stay satisfied.
 - **PWA shell**: `manifest.json` + `service-worker.js` let Chrome offer “Install app.” The service worker runs network-first caching for the chat bundle/manifest/icons, explicitly skips `/api/speech`, and notifies the UI when offline uploads fail so `app.js` can log them for replay.
 - **Commenting standard**: Every newly added function/class/module must include concise WHAT/WHY/HOW comments matching the style used across the repo.
 - **Context-first implementation**: Before adding functionality, scan related files/comments to understand existing patterns and reuse them.
 - **Conservative edge-case handling**: Avoid speculative automation for risky fixes. When safer, guide operators through manual steps (e.g., deleting bad entries from `pending.jsonl`). Document such guidance in AGENTS.md or inline comments.
+- **Secret hygiene**: Keep credentials (OpenAI keys, reviewer tokens) out of the repo—use `.gitignore`, `fly secrets set`, or local `.env` files so sensitive values never land in source control.
 
 ## Agent Flow
 1. Capture user text (CLI or `/api/chat`) and pass it to `Orchestrator.handle_message_with_details`.
@@ -54,7 +56,7 @@
 | **4** | Self-learning pipeline. | Turn logging → review queue, correction endpoints, intent classifier training scripts. |
 | **5** | Web UI / Admin panel. | FastAPI endpoints, chat console, self-learning editor, data-store tabs, classifier/corrected tables, import/export tooling. |
 | **6** | Governance & security hardening. | Policy configs, purge/eval CLI tasks, reviewer identity logging, governance dashboard. |
-| **7** | Voice / PWA experience. | `/api/speech`, voice inbox, installable UI shell. |
+| **7** | Voice / PWA experience. | `/api/speech`, installable UI shell (voice inbox UI deferred to backlog). |
 | **8** | ML + LLM hybrid workflow. | Field-level confidence, schema-aware LLM payload filler, assisted-turn badges. |
 | **9** | Infrastructure & always-on execution. | Containerization, health probes, lightweight schedulers/workers, ops runbook. |
 | **10** | Governance + LLMOps. | Policy enforcement helpers, audit trail exports, governance tab updates. |
@@ -66,7 +68,8 @@ Future backlog (IoT integrations, extended RAG, hardware hooks) resides in `docs
 - The Notes store starts as an ordered JSON document (Tier 3) where each section is fixed and `create` operations insert notes (top-prepended by default). It may evolve into vector-backed RAG components in later tiers.
 - Notes capture personal/brainstorming context separate from AGENTS.md (which stays the canonical system design doc).
 - `/api/logs/label`, `/api/logs/pending`, and `/api/logs/corrected` form the backbone of the self-learning workflow; keep their schemas stable when iterating.
-- `data_pipeline/voice_inbox.json` plus `core.voice_inbox` track `{id,timestamp,audio_path,transcribed_text,status}` rows for Tier‑7’s voice inbox. Audio blobs live under `data_pipeline/voice_uploads/` (gitignored) and `/api/speech` is the sole ingestion path.
+- `data_pipeline/voice_inbox.json` plus `core.voice_inbox` track `{id,timestamp,audio_path,transcribed_text,status}` rows for Tier‑7’s voice inbox. Audio blobs live under `data_pipeline/voice_uploads/` (gitignored) and `/api/speech` is the sole ingestion path; the reviewer UI for browsing/re-running clips is deferred and tracked in the backlog.
+- Fly.io deployment config lives in `Dockerfile` + `fly.toml`; secrets `OPENAI_API_KEY` and `REVIEWER_TOKEN` must be set before running `fly deploy`. Mobile/PWA validation steps are captured in `docs/mobile_pwa.md` (Chrome install, offline retry checks).
 - Governance workflows (`config/governance.yml`, `app/governance_tasks.py`, `core/governance.py`) own purge/eval tasks and reviewer auditing.
 
 ## Development & Validation Rules

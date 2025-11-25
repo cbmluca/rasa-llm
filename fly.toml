@@ -1,0 +1,39 @@
+# fly.toml app configuration file generated for schwinkel on 2025-11-25T19:14:20+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'schwinkel'
+primary_region = 'arn'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  WEB_UI_HOST = '0.0.0.0'
+  WEB_UI_PORT = '8080'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8080
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

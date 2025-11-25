@@ -463,7 +463,7 @@ def create_app(
                 submission_reason="voice_submission",
             )
             pending_record = chat_payload.get("pending_record") or {}
-            pending_id = pending_record.get("id")
+            pending_id = pending_record.get("prompt_id") or pending_record.get("id")
         except SpeechServiceError as exc:
             error_detail = str(exc)
             transcription_text = ""
