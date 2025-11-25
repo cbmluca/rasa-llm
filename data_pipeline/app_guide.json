@@ -3,24 +3,12 @@
     "groceries": {
       "id": "groceries",
       "title": "Groceries",
-      "content": "Test 1\ntest 2\ntest 3\n\nPandekager\n\nTyggegummi\n\nM\u00e6lk",
-      "updated_at": "2025-11-25T10:42:38.814806+00:00",
-      "keywords": [
-        "Shopping",
-        "money",
-        "test"
-      ]
-    },
-    "grovertest": {
-      "id": "grovertest",
-      "title": "Grovertest",
-      "content": "test1test2",
-      "updated_at": "2025-11-25T13:25:31.811630+00:00",
+      "content": "Pandekager\n\nTyggegummi\n\nM\u00e6lk",
+      "updated_at": "2025-11-25T16:54:36.044758+00:00",
       "keywords": []
     }
   },
   "order": [
-    "groceries",
-    "grovertest"
+    "groceries"
   ]
 }

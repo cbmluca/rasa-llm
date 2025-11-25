@@ -56,7 +56,6 @@ const FIELD_LIBRARY = {
     control: () => {
       const select = document.createElement('select');
       select.innerHTML = `
-        <option value=""></option>
         <option value="low">Low</option>
         <option value="medium">Medium</option>
         <option value="high">High</option>
@@ -330,13 +329,398 @@ function createKitchenFormState(action) {
   };
 }
 
-function getNoteSectionTitles() {
-  return (state.dataStores.app_guide || [])
-    .map((entry) => (entry.title || '').trim())
-    .filter((value, index, array) => value && array.indexOf(value) === index);
+function slugifySectionLabel(text = '') {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
-const NOTES_SECTION_DATALIST_ID = 'notes-section-options';
+function humanizeSectionId(value = '') {
+  return value
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function formatNotesSectionHeading(entry = {}) {
+  const rawId = String(entry.id || '').trim();
+  const rawTitle = String(entry.title || '').trim();
+  const slugLower = rawId.toLowerCase();
+  let displayTitle = rawTitle;
+  if (!displayTitle && rawId) {
+    displayTitle = humanizeSectionId(rawId);
+  } else if (displayTitle && rawId && slugifySectionLabel(displayTitle) === slugLower) {
+    displayTitle = humanizeSectionId(rawId);
+  }
+  if (!displayTitle) {
+    displayTitle = 'Untitled section';
+  }
+  const slugMatchesTitle = rawId && slugifySectionLabel(displayTitle) === slugLower;
+  return {
+    title: displayTitle,
+    slug: slugMatchesTitle ? '' : rawId,
+  };
+}
+
+function getNoteSectionTitles() {
+  const seen = new Set();
+  return (state.dataStores.app_guide || [])
+    .map((entry) => {
+      const heading = formatNotesSectionHeading(entry);
+      const rawTitle = (entry.title || '').trim();
+      const optionValue = rawTitle || heading.title;
+      if (!optionValue) {
+        return null;
+      }
+      const key = optionValue.toLowerCase();
+      if (seen.has(key)) {
+        return null;
+      }
+      seen.add(key);
+      if (heading.title && heading.title !== optionValue) {
+        return { value: optionValue, label: heading.title };
+      }
+      return optionValue;
+    })
+    .filter(Boolean);
+}
+
+const COMBOBOX_DEFAULT_LIMIT = 8;
+let comboboxIdCounter = 0;
+
+// WHAT: reusable combobox widget that mixes text input with dropdown suggestions.
+// WHY: several Tier-5 fields (Notes sections, future title lookups, IDs) need both free-form input and scoped suggestions.
+// HOW: accept a config-driven data source, render a popover with filtered options, and expose refresh hooks so other modules can share the component.
+function createCombobox(config = {}) {
+  const {
+    placeholder = '',
+    name,
+    required = false,
+    getOptions = () => [],
+    filterOption,
+    allowCreate = false,
+    createLabel = (value) => `Create "${value}"`,
+    maxOptions = COMBOBOX_DEFAULT_LIMIT,
+    onChange,
+    initialValue = '',
+    toggleLabel = 'Toggle suggestions',
+  } = config;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'notes-combobox';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'notes-combobox-input';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = placeholder;
+  if (name) {
+    input.name = name;
+  }
+  if (required) {
+    input.required = true;
+  }
+  wrapper.appendChild(input);
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'notes-combobox-toggle';
+  toggle.setAttribute('aria-label', toggleLabel);
+  toggle.tabIndex = -1;
+  wrapper.appendChild(toggle);
+  const dropdown = document.createElement('div');
+  dropdown.className = 'notes-combobox-dropdown hidden';
+  dropdown.setAttribute('role', 'listbox');
+  const list = document.createElement('ul');
+  dropdown.appendChild(list);
+  wrapper.appendChild(dropdown);
+  const dropdownId = `combobox-${comboboxIdCounter++}`;
+  dropdown.id = dropdownId;
+  input.setAttribute('aria-haspopup', 'listbox');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-controls', dropdownId);
+
+  const instance = {
+    wrapper,
+    input,
+    toggle,
+    dropdown,
+    list,
+    onChange: typeof onChange === 'function' ? onChange : null,
+    isOpen: false,
+    highlightIndex: -1,
+    options: [],
+    blurTimeout: null,
+    optionSource: [],
+  };
+
+  function notifyChange(value) {
+    if (instance.onChange) {
+      instance.onChange(value);
+    }
+  }
+
+  function setInputValue(value, options = {}) {
+    const text = value || '';
+    const silent = Boolean(options.silent);
+    if (input.value === text) {
+      if (!silent) {
+        notifyChange(text);
+      }
+      return;
+    }
+    input.value = text;
+    if (!silent) {
+      notifyChange(text);
+    }
+  }
+
+  function selectOption(option) {
+    if (!option || option.type === 'empty') return;
+    setInputValue(option.value);
+    closeDropdown();
+    input.focus();
+  }
+
+  function getSelectableIndex(startIndex = 0, step = 1) {
+    if (!instance.options.length) return -1;
+    const length = instance.options.length;
+    let index = startIndex;
+    for (let attempts = 0; attempts < length; attempts += 1) {
+      if (instance.options[index] && instance.options[index].type !== 'empty') {
+        return index;
+      }
+      index = (index + step + length) % length;
+    }
+    return -1;
+  }
+
+  function normalizeOptions(rawOptions = []) {
+    return rawOptions
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          const text = entry.trim();
+          return text ? { value: text, label: text } : null;
+        }
+        if (entry && typeof entry === 'object') {
+          const value = (entry.value || entry.label || '').toString().trim();
+          if (!value) {
+            return null;
+          }
+          return { value, label: entry.label ? String(entry.label) : value };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  function defaultFilter(option, query) {
+    if (!query) return true;
+    const text = option.label || option.value || '';
+    return text.toLowerCase().includes(query.toLowerCase());
+  }
+
+  function renderOptions(queryText = '') {
+    const source = normalizeOptions(getOptions());
+    instance.optionSource = source;
+    const normalized = queryText.trim().toLowerCase();
+    let matches = source;
+    const filterFn = typeof filterOption === 'function' ? filterOption : defaultFilter;
+    if (normalized) {
+      matches = source.filter((option) => filterFn(option, queryText));
+    }
+    matches = matches.slice(0, Math.max(1, maxOptions));
+    const options = matches.map((option) => ({
+      type: 'option',
+      label: option.label,
+      value: option.value,
+    }));
+    if (
+      allowCreate &&
+      normalized &&
+      !source.some((option) => option.value.toLowerCase() === normalized)
+    ) {
+      const trimmedValue = queryText.trim();
+      options.push({
+        type: 'create',
+        label: createLabel(trimmedValue),
+        value: trimmedValue,
+      });
+    }
+    if (!options.length) {
+      options.push({
+        type: 'empty',
+        label: 'No sections yet',
+        value: '',
+      });
+    }
+    instance.options = options;
+    list.innerHTML = '';
+    options.forEach((option, index) => {
+      const item = document.createElement('li');
+      item.className = 'notes-combobox-option';
+      item.setAttribute('role', 'option');
+      if (option.type === 'create') {
+        item.classList.add('notes-combobox-option--create');
+      }
+      if (option.type === 'empty') {
+        item.classList.add('notes-combobox-option--empty');
+        item.setAttribute('aria-disabled', 'true');
+      }
+      if (index === instance.highlightIndex) {
+        item.classList.add('active');
+      }
+      item.textContent = option.label;
+      if (option.type !== 'empty') {
+        item.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          selectOption(option);
+        });
+      }
+      list.appendChild(item);
+    });
+    if (instance.highlightIndex === -1 || !instance.options[instance.highlightIndex] || instance.options[instance.highlightIndex].type === 'empty') {
+      instance.highlightIndex = getSelectableIndex(0, 1);
+    }
+    Array.from(list.children).forEach((item, idx) => {
+      item.classList.toggle('active', idx === instance.highlightIndex);
+    });
+  }
+
+  function openDropdown() {
+    if (instance.isOpen) {
+      renderOptions(input.value);
+      return;
+    }
+    instance.isOpen = true;
+    instance.dropdown.classList.remove('hidden');
+    wrapper.classList.add('notes-combobox--open');
+    input.setAttribute('aria-expanded', 'true');
+    renderOptions(input.value);
+  }
+
+  function closeDropdown() {
+    if (!instance.isOpen) return;
+    instance.isOpen = false;
+    wrapper.classList.remove('notes-combobox--open');
+    dropdown.classList.add('hidden');
+    input.setAttribute('aria-expanded', 'false');
+    instance.highlightIndex = -1;
+  }
+
+  function cancelPendingClose() {
+    if (instance.blurTimeout) {
+      clearTimeout(instance.blurTimeout);
+      instance.blurTimeout = null;
+    }
+  }
+
+  function scheduleClose() {
+    cancelPendingClose();
+    instance.blurTimeout = setTimeout(() => {
+      closeDropdown();
+    }, 120);
+  }
+
+  function moveHighlight(step) {
+    if (!instance.isOpen || !instance.options.length) return;
+    const length = instance.options.length;
+    if (length === 1 && instance.options[0].type === 'empty') {
+      instance.highlightIndex = -1;
+      return;
+    }
+    if (instance.highlightIndex === -1) {
+      instance.highlightIndex = getSelectableIndex(step > 0 ? 0 : length - 1, step);
+    } else {
+      let nextIndex = instance.highlightIndex;
+      for (let attempts = 0; attempts < length; attempts += 1) {
+        nextIndex = (nextIndex + step + length) % length;
+        if (instance.options[nextIndex] && instance.options[nextIndex].type !== 'empty') {
+          instance.highlightIndex = nextIndex;
+          break;
+        }
+      }
+    }
+    Array.from(list.children).forEach((item, idx) => {
+      item.classList.toggle('active', idx === instance.highlightIndex);
+    });
+  }
+
+  input.addEventListener('focus', () => {
+    cancelPendingClose();
+    openDropdown();
+  });
+  input.addEventListener('blur', () => {
+    scheduleClose();
+  });
+  dropdown.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    cancelPendingClose();
+  });
+  toggle.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    cancelPendingClose();
+  });
+  toggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (instance.isOpen) {
+      closeDropdown();
+    } else {
+      openDropdown();
+      input.focus();
+    }
+  });
+  input.addEventListener('input', () => {
+    notifyChange(input.value);
+    openDropdown();
+    renderOptions(input.value);
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      openDropdown();
+      moveHighlight(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      openDropdown();
+      moveHighlight(-1);
+    } else if (event.key === 'Enter') {
+      if (instance.isOpen && instance.highlightIndex !== -1) {
+        const option = instance.options[instance.highlightIndex];
+        if (option && option.type !== 'empty') {
+          event.preventDefault();
+          selectOption(option);
+        }
+      }
+    } else if (event.key === 'Escape') {
+      if (instance.isOpen) {
+        event.preventDefault();
+        closeDropdown();
+      }
+    }
+  });
+
+  if (initialValue) {
+    setInputValue(initialValue, { silent: true });
+  }
+
+  const api = {
+    element: wrapper,
+    input,
+    refreshOptions: () => {
+      if (instance.isOpen) {
+        renderOptions(input.value);
+      }
+    },
+    setValue: (value, options = {}) => setInputValue(value, options),
+    getValue: () => input.value,
+    focus: () => input.focus(),
+    close: () => closeDropdown(),
+  };
+
+  return api;
+}
 
 function disableAutofill() {
   document.querySelectorAll('form').forEach((form) => form.setAttribute('autocomplete', 'off'));
@@ -350,16 +734,21 @@ const STORAGE_KEYS = {
   LATEST_CONFIRMED: 'tier5_latest_confirmed',
   SELECTED_PROMPT: 'tier5_selected_prompt',
   REVIEWER_ID: 'tier5_reviewer_id',
+  REVIEWER_TOKEN: 'tier5_reviewer_token',
   LAST_PURGE_ALERT_SIGNATURE: 'tier5_last_purge_alert_signature',
   LAST_TRAINING_ALERT_COUNT: 'tier5_last_training_alert_count',
   DATA_ACTIVE_TAB: 'tier5_data_active_tab',
   DATA_SELECTED_ROWS: 'tier5_data_selected_rows',
+  VOICE_OFFLINE_LOG: 'tier5_voice_offline_attempts',
 };
 
 let pollTimer;
 
 const DATA_STORE_IDS = ['todos', 'calendar', 'kitchen_tips', 'app_guide'];
 const SELECTABLE_DATA_STORES = new Set(['todos', 'calendar', 'kitchen_tips']);
+const VOICE_MIN_DURATION_MS = 5000;
+const VOICE_MAX_DURATION_MS = 15000;
+const VOICE_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mpeg'];
 
 const state = {
   chat: [],
@@ -380,6 +769,7 @@ const state = {
   corrected: [],
   stats: {},
   datetimeInputs: {},
+  notesComboboxes: null,
   pendingChatEntry: null,
   duplicateConfirmations: {},
   dataStores: {
@@ -413,6 +803,18 @@ const state = {
   kitchenSort: { column: 'title', direction: 'asc' },
   activeDataTab: 'todos',
   reviewerId: '',
+  reviewerToken: '',
+  voice: {
+    supported: false,
+    mediaRecorder: null,
+    recording: false,
+    chunks: [],
+    mimeType: 'audio/webm',
+    mediaError: null,
+    stopTimer: null,
+    uploading: false,
+    startedAt: null,
+  },
   notifications: [],
 };
 
@@ -421,6 +823,8 @@ const el = {
   chatForm: document.querySelector('#chat-form'),
   chatInput: document.querySelector('#chat-input'),
   chatStatus: document.querySelector('#chat-status'),
+  chatVoiceButton: document.querySelector('#chat-voice-button'),
+  voiceStatus: document.querySelector('#voice-status'),
   intentSelect: document.querySelector('#intent-select'),
   actionSelect: document.querySelector('#action-select'),
   relatedPromptsList: document.querySelector('#related-prompts-list'),
@@ -471,6 +875,7 @@ const el = {
   kitchenCrudReset: document.querySelector('#kitchen-reset-button'),
   kitchenSortButtons: document.querySelectorAll('[data-kitchen-sort]'),
   guideList: document.querySelector('#guide-list'),
+  guideSectionField: document.querySelector('#guide-section-field'),
   guideForm: document.querySelector('#guide-form'),
   classifierTable: document.querySelector('#classifier-table tbody'),
   classifierRefresh: document.querySelector('#classifier-refresh'),
@@ -488,6 +893,8 @@ const el = {
   trainingPage: document.querySelector('#training-page'),
   reviewerBadge: document.querySelector('#reviewer-id-badge'),
   reviewerButton: document.querySelector('#set-reviewer-id'),
+  reviewerTokenBadge: document.querySelector('#reviewer-token-badge'),
+  reviewerTokenButton: document.querySelector('#set-reviewer-token'),
   notificationsList: document.querySelector('#notifications-list'),
   governancePolicyVersion: document.querySelector('#governance-policy-version'),
   governanceAllowedTools: document.querySelector('#governance-allowed-tools'),
@@ -589,6 +996,82 @@ function getReviewerId() {
       state.reviewerId = stored;
       updateReviewerBadge();
       return state.reviewerId;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return '';
+}
+
+function updateReviewerTokenBadge() {
+  if (!el.reviewerTokenBadge) return;
+  if (state.reviewerToken) {
+    el.reviewerTokenBadge.textContent = 'Token set';
+    el.reviewerTokenBadge.classList.remove('warning');
+  } else {
+    el.reviewerTokenBadge.textContent = 'Token missing';
+    el.reviewerTokenBadge.classList.add('warning');
+  }
+}
+
+function setReviewerToken(value) {
+  state.reviewerToken = value || '';
+  updateReviewerTokenBadge();
+  try {
+    if (state.reviewerToken) {
+      localStorage.setItem(STORAGE_KEYS.REVIEWER_TOKEN, state.reviewerToken);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.REVIEWER_TOKEN);
+    }
+  } catch (err) {
+    // ignore storage issues
+  }
+}
+
+function restoreReviewerToken() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_TOKEN);
+    if (stored) {
+      state.reviewerToken = stored;
+    }
+  } catch (err) {
+    // ignore
+  }
+  updateReviewerTokenBadge();
+}
+
+function promptForReviewerToken() {
+  const input = window.prompt('Enter the reviewer token (leave blank to clear).', '');
+  if (input === null) {
+    return false;
+  }
+  const normalized = (input || '').trim();
+  setReviewerToken(normalized);
+  if (normalized) {
+    showToast('Reviewer token saved.', 'success');
+    return true;
+  }
+  showToast('Reviewer token cleared. API calls will fail until you set one.', 'warning');
+  return false;
+}
+
+function ensureReviewerToken() {
+  restoreReviewerToken();
+  if (!state.reviewerToken) {
+    showToast('Set your reviewer token with the Token button to use the API.', 'warning');
+  }
+}
+
+function getReviewerToken() {
+  if (state.reviewerToken) {
+    return state.reviewerToken;
+  }
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_TOKEN);
+    if (stored) {
+      state.reviewerToken = stored;
+      updateReviewerTokenBadge();
+      return state.reviewerToken;
     }
   } catch (err) {
     // ignore
@@ -733,6 +1216,263 @@ function setChatStatus(text) {
   if (el.chatStatus) {
     el.chatStatus.textContent = text;
   }
+}
+
+function setVoiceStatus(text, tone = 'info') {
+  if (!el.voiceStatus) return;
+  if (!text) {
+    el.voiceStatus.classList.add('hidden');
+    el.voiceStatus.removeAttribute('data-tone');
+    return;
+  }
+  el.voiceStatus.textContent = text;
+  el.voiceStatus.dataset.tone = tone;
+  el.voiceStatus.classList.remove('hidden');
+}
+
+function updateVoiceButtonState() {
+  if (!el.chatVoiceButton) return;
+  if (!state.voice.supported) {
+    el.chatVoiceButton.classList.add('hidden');
+    return;
+  }
+  el.chatVoiceButton.classList.remove('hidden');
+  el.chatVoiceButton.disabled = Boolean(state.voice.uploading || state.voice.mediaError);
+  el.chatVoiceButton.textContent = state.voice.recording ? 'Stop' : 'Voice';
+  el.chatVoiceButton.dataset.state = state.voice.recording ? 'recording' : 'idle';
+}
+
+function recordOfflineVoiceAttempt(meta = {}) {
+  try {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      ...meta,
+    };
+    const existing = JSON.parse(localStorage.getItem(STORAGE_KEYS.VOICE_OFFLINE_LOG) || '[]');
+    existing.push(entry);
+    const trimmed = existing.slice(-20);
+    localStorage.setItem(STORAGE_KEYS.VOICE_OFFLINE_LOG, JSON.stringify(trimmed));
+  } catch (err) {
+    console.warn('Failed to record offline voice attempt', err);
+  }
+}
+
+function detectVoiceSupport() {
+  const supported = Boolean(navigator?.mediaDevices?.getUserMedia) && typeof window !== 'undefined' && 'MediaRecorder' in window;
+  state.voice.supported = supported;
+  state.voice.mediaError = null;
+  if (!supported) {
+    setVoiceStatus('Voice capture needs Chrome on desktop or iPhone.', 'warning');
+  } else {
+    setVoiceStatus('Mic ready (Chrome desktop + iPhone).', 'info');
+  }
+  updateVoiceButtonState();
+}
+
+function pickVoiceMimeType() {
+  if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') {
+    return 'audio/webm';
+  }
+  for (const type of VOICE_MIME_TYPES) {
+    if (window.MediaRecorder.isTypeSupported(type)) {
+      return type;
+    }
+  }
+  return 'audio/webm';
+}
+
+function handleMediaError(err) {
+  console.error('Voice recording error', err);
+  state.voice.mediaError = err?.message || 'Microphone unavailable. Use text input.';
+  state.voice.recording = false;
+  if (state.voice.mediaRecorder) {
+    try {
+      if (state.voice.mediaRecorder.state !== 'inactive') {
+        state.voice.mediaRecorder.stop();
+      }
+    } catch (stopErr) {
+      console.warn('Failed to stop recorder', stopErr);
+    }
+  }
+  if (state.voice.stopTimer) {
+    clearTimeout(state.voice.stopTimer);
+    state.voice.stopTimer = null;
+  }
+  updateVoiceButtonState();
+  setVoiceStatus('Mic unavailable — falling back to text input.', 'error');
+}
+
+function stopVoiceRecording() {
+  if (state.voice.mediaRecorder && state.voice.mediaRecorder.state !== 'inactive') {
+    state.voice.mediaRecorder.stop();
+  }
+}
+
+async function startVoiceRecording() {
+  if (!state.voice.supported || state.voice.recording || state.voice.uploading || state.voice.mediaError) {
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = pickVoiceMimeType();
+    const options = mimeType ? { mimeType } : undefined;
+    const recorder = new MediaRecorder(stream, options);
+    state.voice.mediaRecorder = recorder;
+    state.voice.mimeType = mimeType || recorder.mimeType || 'audio/webm';
+    state.voice.chunks = [];
+    state.voice.recording = true;
+    state.voice.startedAt = Date.now();
+    updateVoiceButtonState();
+    setVoiceStatus('Recording… tap Stop by 15s.', 'info');
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        state.voice.chunks.push(event.data);
+      }
+    };
+    recorder.onerror = (event) => {
+      handleMediaError(event.error || new Error('Recorder error'));
+    };
+    recorder.onstop = () => {
+      if (state.voice.stopTimer) {
+        clearTimeout(state.voice.stopTimer);
+        state.voice.stopTimer = null;
+      }
+      const chunks = [...state.voice.chunks];
+      state.voice.chunks = [];
+      state.voice.recording = false;
+      state.voice.mediaRecorder = null;
+      try {
+        stream.getTracks().forEach((track) => track.stop());
+      } catch (cleanupErr) {
+        console.warn('Failed to stop tracks', cleanupErr);
+      }
+      updateVoiceButtonState();
+      if (!chunks.length) {
+        setVoiceStatus('Recording failed — try again.', 'error');
+        return;
+      }
+      const blob = new Blob(chunks, { type: state.voice.mimeType || 'audio/webm' });
+      const duration = Date.now() - (state.voice.startedAt || Date.now());
+      if (duration < VOICE_MIN_DURATION_MS) {
+        showToast('Voice clips under 5 seconds may not transcribe accurately.', 'warning');
+      }
+      uploadVoiceClip(blob);
+    };
+    recorder.start();
+    state.voice.stopTimer = window.setTimeout(() => {
+      stopVoiceRecording();
+    }, VOICE_MAX_DURATION_MS);
+  } catch (err) {
+    handleMediaError(err);
+  }
+}
+
+async function uploadVoiceClip(blob) {
+  if (!blob || !blob.size) {
+    setVoiceStatus('Recording failed — empty audio.', 'error');
+    return;
+  }
+  const extension = blob.type.includes('mpeg') ? 'mp3' : 'webm';
+  const formData = new FormData();
+  formData.append('audio', blob, `clip-${Date.now()}.${extension}`);
+  const reviewerId = getReviewerId();
+  const headers = reviewerId ? { 'X-Reviewer-ID': reviewerId } : {};
+  state.voice.uploading = true;
+  setVoiceStatus('Transcribing…', 'info');
+  setChatStatus('Transcribing…');
+  updateVoiceButtonState();
+  try {
+    const response = await fetch('/api/speech', {
+      method: 'POST',
+      body: formData,
+      headers,
+    });
+    const text = await response.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch (parseErr) {
+        console.warn('Failed to parse /api/speech response', parseErr);
+      }
+    }
+    if (!response.ok) {
+      throw new Error(payload?.detail || payload?.error || 'Voice upload failed');
+    }
+    if ((payload?.transcription_status || '').toLowerCase() !== 'completed') {
+      const errorMessage = payload?.error || 'Transcription failed. Try again when online.';
+      showToast(errorMessage, 'error');
+      return;
+    }
+    handleSpeechPayload(payload);
+    await Promise.all([loadPending(true), refreshActiveDataTab()]);
+    showToast('Voice message sent', 'success');
+  } catch (err) {
+    state.pendingChatEntry = null;
+    recordOfflineVoiceAttempt({ reason: err?.message || 'network_error', size: blob.size, mimeType: blob.type });
+    showToast(err.message || 'Voice upload failed', 'error');
+  } finally {
+    state.voice.uploading = false;
+    if (!state.voice.mediaError) {
+      setVoiceStatus('Mic ready (Chrome desktop + iPhone).', 'info');
+    }
+    setChatStatus('Ready');
+    updateVoiceButtonState();
+  }
+}
+
+function handleSpeechPayload(payload) {
+  if (!payload) return;
+  const transcript = (payload.text || '').trim();
+  if (transcript) {
+    const entry = { role: 'user', text: transcript, entryId: null, via: 'voice' };
+    state.chat.push(entry);
+    state.pendingChatEntry = entry;
+    persistChatHistory();
+    renderChat();
+  }
+  if (payload.chat) {
+    appendAssistantReply(payload.chat);
+  }
+}
+
+function appendAssistantReply(reply) {
+  if (!reply) return;
+  state.chat.push({ role: 'assistant', text: reply.reply, meta: reply });
+  persistChatHistory();
+  renderChat();
+  if (state.pendingChatEntry) {
+    const entryId = reply.pending_record?.conversation_entry_id || reply.extras?.conversation_entry_id;
+    if (entryId) {
+      state.pendingChatEntry.entryId = entryId;
+    }
+    if (reply.pending_record?.prompt_id) {
+      state.pendingChatEntry.promptId = reply.pending_record.prompt_id;
+    }
+    state.pendingChatEntry = null;
+  }
+  if (reply.pending_record) {
+    addPendingRecord(reply.pending_record);
+  }
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    return;
+  }
+  window.addEventListener('load', async () => {
+    try {
+      await navigator.serviceWorker.register('/static/service-worker.js');
+    } catch (err) {
+      console.warn('Service worker registration failed', err);
+    }
+  });
+  navigator.serviceWorker?.addEventListener('message', (event) => {
+    if (event.data?.type === 'voice-upload-offline') {
+      recordOfflineVoiceAttempt({ reason: 'offline_sw', ...(event.data?.meta || {}) });
+      showToast('Offline voice upload logged. Re-send when back online.', 'warning');
+    }
+  });
 }
 
 // WHAT: swap between the dashboard’s top-level views (Chat, Training, Data Stores).
@@ -2108,7 +2848,11 @@ function renderIntendedEntities() {
     li.appendChild(removeBtn);
     el.intendedEntitiesList.appendChild(li);
   });
-  updateEntityOptions();
+  if (document.activeElement === el.entitySearchInput) {
+    updateEntityOptions(el.entitySearchInput.value);
+  } else {
+    hideEntityOptions();
+  }
 }
 
 // WHAT: convert the current tool’s store rows into Intended Entity suggestions.
@@ -2759,6 +3503,11 @@ function renderDynamicFields(tool, action) {
   const targetGrid = el.dynamicFieldGrid;
   targetGrid.innerHTML = '';
   targetGrid.classList.toggle('calendar-layout', tool === 'calendar_edit');
+  if (tool === 'app_guide') {
+    state.notesComboboxes = new Set();
+  } else {
+    state.notesComboboxes = null;
+  }
   const requiresActionFirst = !!TOOL_ACTION_FIELD_CONFIG[tool];
   if (!tool || !state.selectedPrompt) {
     return;
@@ -2915,6 +3664,36 @@ function renderDynamicFields(tool, action) {
       return;
     }
 
+    if (tool === 'app_guide' && field === 'title') {
+      const combo = createCombobox({
+        placeholder: getFieldLabel(tool, field),
+        initialValue: state.correctionFields[field] ?? state.hiddenFields.lookup_title ?? '',
+        getOptions: getNoteSectionTitles,
+        allowCreate: true,
+        onChange: (text) => {
+          const value = text.trim();
+          if (value) {
+            state.correctionFields[field] = value;
+            state.hiddenFields.lookup_title = value;
+            wrapper.classList.remove('field-required');
+          } else {
+            delete state.correctionFields[field];
+            delete state.hiddenFields.lookup_title;
+            if (required) {
+              wrapper.classList.add('field-required');
+            }
+          }
+          flagReviewerChange(field);
+          updateCorrectButtonState();
+        },
+      });
+      state.notesComboboxes?.add(combo);
+      wrapper.appendChild(combo.element);
+      applyFieldLayout(wrapper, tool, normalizedAction, field);
+      targetGrid.appendChild(wrapper);
+      return;
+    }
+
     const control =
       config.control?.() ||
       (config.type === 'textarea' ? document.createElement('textarea') : document.createElement('input'));
@@ -2931,10 +3710,6 @@ function renderDynamicFields(tool, action) {
         }
       }
     });
-    if (tool === 'app_guide' && field === 'title' && control.tagName === 'INPUT') {
-      control.setAttribute('autocomplete', 'off');
-      control.setAttribute('list', NOTES_SECTION_DATALIST_ID);
-    }
     wrapper.appendChild(control);
     applyFieldLayout(wrapper, tool, normalizedAction, field);
     targetGrid.appendChild(wrapper);
@@ -3358,7 +4133,8 @@ function renderCorrectedTable() {
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'button ghost';
-    deleteBtn.textContent = 'Delete';
+    deleteBtn.textContent = 'x';
+    deleteBtn.setAttribute('aria-label', 'Delete');
     deleteBtn.addEventListener('click', async () => {
       if (!record.id && !record.correction_id) {
         return;
@@ -5059,11 +5835,22 @@ function renderNotes() {
   entries.forEach((entry) => {
     const wrapper = document.createElement('li');
     wrapper.className = 'notes-section';
+    const canMutateSection = Boolean(entry.id);
     const header = document.createElement('div');
     header.className = 'notes-section-header';
+    const titleGroup = document.createElement('div');
+    titleGroup.className = 'notes-section-title-group';
+    const heading = formatNotesSectionHeading(entry);
     const title = document.createElement('strong');
-    title.textContent = `${entry.id || 'section'}: ${entry.title || 'Untitled'}`;
-    header.appendChild(title);
+    title.textContent = heading.title;
+    titleGroup.appendChild(title);
+    if (heading.slug) {
+      const slugBadge = document.createElement('span');
+      slugBadge.className = 'notes-section-slug';
+      slugBadge.textContent = heading.slug;
+      titleGroup.appendChild(slugBadge);
+    }
+    header.appendChild(titleGroup);
     const deleteSection = document.createElement('button');
     deleteSection.type = 'button';
     deleteSection.className = 'button ghost notes-delete-section';
@@ -5085,25 +5872,22 @@ function renderNotes() {
     wrapper.appendChild(header);
     if (entry.content) {
       const paragraphs = entry.content.split(/\n{2,}/).filter(Boolean);
-      paragraphs.forEach((para) => {
+      paragraphs.forEach((para, paraIndex) => {
         const row = document.createElement('div');
         row.className = 'notes-entry-row';
-        const body = document.createElement('p');
-        body.textContent = para;
-        row.appendChild(body);
-        if (entry.id) {
+        if (canMutateSection) {
           const deleteEntry = document.createElement('button');
           deleteEntry.type = 'button';
           deleteEntry.className = 'notes-entry-delete';
+          deleteEntry.setAttribute('aria-label', 'Delete entry');
           deleteEntry.textContent = '×';
           deleteEntry.addEventListener('click', async (event) => {
             event.stopPropagation();
             deleteEntry.disabled = true;
             try {
               const chunks = (entry.content || '').split(/\n{2,}/).filter(Boolean);
-              const removeIndex = paragraphs.indexOf(para);
-              if (removeIndex !== -1) {
-                chunks.splice(removeIndex, 1);
+              if (paraIndex >= 0 && paraIndex < chunks.length) {
+                chunks.splice(paraIndex, 1);
                 await mutateStore('app_guide', {
                   action: 'overwrite',
                   id: entry.id,
@@ -5119,14 +5903,61 @@ function renderNotes() {
           });
           row.appendChild(deleteEntry);
         }
+        const body = document.createElement('p');
+        body.textContent = para;
+        row.appendChild(body);
         wrapper.appendChild(row);
       });
     }
     if (Array.isArray(entry.keywords) && entry.keywords.length) {
-      const keywords = document.createElement('p');
-      keywords.className = 'meta';
-      keywords.textContent = `Keywords: ${entry.keywords.join(', ')}`;
-      wrapper.appendChild(keywords);
+      const keywords = document.createElement('div');
+      keywords.className = 'notes-keywords';
+      const keywordsLabel = document.createElement('span');
+      keywordsLabel.className = 'notes-keywords-label';
+      keywordsLabel.textContent = 'Keywords';
+      keywords.appendChild(keywordsLabel);
+      const keywordsList = document.createElement('div');
+      keywordsList.className = 'notes-keywords-list';
+      entry.keywords.forEach((keyword, keywordIndex) => {
+        const chip = document.createElement('span');
+        chip.className = 'notes-keyword-chip';
+        const text = document.createElement('span');
+        text.textContent = keyword;
+        chip.appendChild(text);
+        if (canMutateSection) {
+          const removeKeyword = document.createElement('button');
+          removeKeyword.type = 'button';
+          removeKeyword.className = 'notes-keyword-remove';
+          removeKeyword.setAttribute('aria-label', `Remove keyword ${keyword}`);
+          removeKeyword.textContent = '×';
+          removeKeyword.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            removeKeyword.disabled = true;
+            try {
+              const updatedKeywords = [...(entry.keywords || [])];
+              if (keywordIndex >= 0 && keywordIndex < updatedKeywords.length) {
+                updatedKeywords.splice(keywordIndex, 1);
+                await mutateStore('app_guide', {
+                  action: 'overwrite',
+                  id: entry.id,
+                  title: entry.title,
+                  content: entry.content,
+                  keywords: updatedKeywords.length ? updatedKeywords : [],
+                  link: entry.link,
+                });
+              }
+            } finally {
+              removeKeyword.disabled = false;
+            }
+          });
+          chip.appendChild(removeKeyword);
+        }
+        keywordsList.appendChild(chip);
+      });
+      keywords.appendChild(keywordsList);
+      if (keywordsList.children.length > 0) {
+        wrapper.appendChild(keywords);
+      }
     }
     if (entry.link) {
       const link = document.createElement('a');
@@ -5142,16 +5973,10 @@ function renderNotes() {
 }
 
 function updateNotesSectionOptions() {
-  const titles = getNoteSectionTitles();
-  const datalist = document.querySelector(`#${NOTES_SECTION_DATALIST_ID}`);
-  if (!datalist) return;
-  datalist.innerHTML = '';
-  titles.forEach((title) => {
-    if (!title) return;
-    const option = document.createElement('option');
-    option.value = title;
-    datalist.appendChild(option);
-  });
+  el.guideSectionCombobox?.refreshOptions();
+  if (state.notesComboboxes) {
+    state.notesComboboxes.forEach((combo) => combo.refreshOptions());
+  }
 }
 
 // WHAT: fetch a single data store (todos/calendar/etc.) from the backend and rerender it.
@@ -5209,11 +6034,15 @@ function updateDataTabUI() {
 function setActiveDataTab(target, options = {}) {
   const normalized = DATA_STORE_IDS.includes(target) ? target : 'todos';
   const { skipRefresh = false, persist = true, force = false } = options;
-  if (!force && state.activeDataTab === normalized) {
+  const previousTab = state.activeDataTab;
+  if (!force && previousTab === normalized) {
     return;
   }
   state.activeDataTab = normalized;
   updateDataTabUI();
+  if (normalized === 'todos' && previousTab && previousTab !== 'todos') {
+    setTodoCrudAction('create');
+  }
   if (persist) {
     persistActiveDataTab();
   }
@@ -5396,24 +6225,9 @@ function wireEvents() {
         method: 'POST',
         body: JSON.stringify({ message }),
       });
-      state.chat.push({ role: 'assistant', text: reply.reply, meta: reply });
-      persistChatHistory();
-      renderChat();
-      if (state.pendingChatEntry) {
-        const entryId = reply.pending_record?.conversation_entry_id || reply.extras?.conversation_entry_id;
-        if (entryId) {
-          state.pendingChatEntry.entryId = entryId;
-        }
-        if (reply.pending_record?.prompt_id) {
-          state.pendingChatEntry.promptId = reply.pending_record.prompt_id;
-        }
-        state.pendingChatEntry = null;
-      }
+      appendAssistantReply(reply);
       if (state.selectedPrompt) {
         updateRelatedPromptOptions();
-      }
-      if (reply.pending_record) {
-        addPendingRecord(reply.pending_record);
       }
       await Promise.all([loadPending(true), refreshActiveDataTab()]);
     } catch (err) {
@@ -5421,6 +6235,14 @@ function wireEvents() {
       state.pendingChatEntry = null;
     } finally {
       setChatStatus('Ready');
+    }
+  });
+
+  el.chatVoiceButton?.addEventListener('click', () => {
+    if (state.voice.recording) {
+      stopVoiceRecording();
+    } else {
+      startVoiceRecording();
     }
   });
 
@@ -5518,22 +6340,46 @@ function wireEvents() {
     setCalendarCrudAction('create');
   });
 
+  if (el.guideSectionField) {
+    el.guideSectionField.innerHTML = '';
+    const combo = createCombobox({
+      name: 'title',
+      placeholder: 'Section',
+      required: true,
+      getOptions: getNoteSectionTitles,
+      allowCreate: true,
+    });
+    el.guideSectionField.appendChild(combo.element);
+    el.guideSectionCombobox = combo;
+  }
+
   el.guideForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(el.guideForm);
+    const title = (formData.get('title') || '').toString().trim();
+    const content = (formData.get('content') || '').toString().trim();
     const keywords = (formData.get('keywords') || '')
       .toString()
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean);
+    if (!title) {
+      showToast('Section is required.', 'error');
+      return;
+    }
+    if (!content && !keywords.length) {
+      showToast('Add content or at least one keyword before saving.', 'error');
+      return;
+    }
     await mutateStore('app_guide', {
       action: 'create',
-      title: formData.get('title'),
-      content: formData.get('content'),
+      title,
+      content,
       keywords,
       link: formData.get('link') || undefined,
     });
     el.guideForm.reset();
+    el.guideSectionCombobox?.setValue('', { silent: true });
   });
 
   el.exportButton?.addEventListener('click', async () => {
@@ -5631,6 +6477,8 @@ async function bootstrap() {
   restoreDataPanelState();
   ensureReviewerId();
   disableAutofill();
+  detectVoiceSupport();
+  registerServiceWorker();
   wireEvents();
   setActiveDataTab(state.activeDataTab, { force: true, skipRefresh: true, persist: false });
   setChatStatus('Ready');

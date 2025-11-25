@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Taskmaster</title>
+    <link rel="manifest" href="/static/manifest.json" />
+    <meta name="theme-color" content="#0f172a" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -18,15 +20,28 @@
           <h1>Taskmaster</h1>
         </div>
         <div class="header-actions">
-          <div class="reviewer-chip">
-            <span class="hint">Reviewer</span>
-            <div class="reviewer-chip-controls">
+          <div class="header-card reviewer-card">
+            <div class="header-card-controls">
               <span class="badge" id="reviewer-id-badge">anonymous</span>
               <button id="set-reviewer-id" class="button ghost" type="button">Change</button>
             </div>
           </div>
-          <button id="refresh-button" class="button secondary">Refresh Data</button>
-          <a class="button ghost" href="/exports" target="_blank" rel="noreferrer">Open Exports</a>
+          <div class="header-card reviewer-card">
+            <div class="header-card-controls">
+              <span class="badge warning" id="reviewer-token-badge">Token missing</span>
+              <button id="set-reviewer-token" class="button ghost" type="button">Token</button>
+            </div>
+          </div>
+          <div class="header-card">
+            <div class="header-card-controls">
+              <button id="refresh-button" class="button secondary" type="button">Refresh Data</button>
+            </div>
+          </div>
+          <div class="header-card">
+            <div class="header-card-controls">
+              <a class="button secondary" href="/exports" target="_blank" rel="noreferrer">Open Exports</a>
+            </div>
+          </div>
         </div>
       </header>
       <!--
@@ -71,8 +86,13 @@
           <div class="chat-log" id="chat-log"></div>
           <form id="chat-form" class="chat-form">
             <input id="chat-input" type="text" placeholder="Type a prompt to hit the orchestrator…" autocomplete="off" />
+            <button id="chat-voice-button" class="button ghost" type="button" title="Send a 5–15 second voice clip">Voice</button>
             <button type="submit" class="button primary">Send</button>
           </form>
+          <div class="voice-helper">
+            <span class="hint">Voice capture works on Chrome desktop + Chrome on iPhone.</span>
+            <span class="badge subtle hidden" id="voice-status"></span>
+          </div>
         </section>
 
         <!--
@@ -277,16 +297,7 @@
             </div>
             <div class="data-panel-view" data-store="app_guide">
               <form id="guide-form" class="inline-form">
-                <div class="notes-section-field">
-                  <input
-                    id="guide-section-input"
-                    name="title"
-                    placeholder="Section"
-                    required
-                    list="notes-section-options"
-                    autocomplete="off"
-                  />
-                </div>
+                <div class="notes-section-field" id="guide-section-field"></div>
                 <input name="keywords" placeholder="Keywords (comma separated)" />
                 <input name="link" placeholder="Link" />
                 <textarea name="content" placeholder="Content" required></textarea>
@@ -420,7 +431,6 @@
           </div>
         </section>
       </div>
-      <datalist id="notes-section-options"></datalist>
 
       <div class="page-view" id="governance-page">
         <section class="panel">

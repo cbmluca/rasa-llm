@@ -71,12 +71,15 @@ def build_client(
     orchestrator: StubOrchestrator | None = None,
     policy: GovernancePolicy | None = None,
     reviewer_id: str | None = "tester",
+    reviewer_token: str | None = "secret-token",
 ) -> TestClient:
     pending = tmp_path / "pending.jsonl"
     labeled = tmp_path / "labeled.jsonl"
     turn_log = tmp_path / "turns.jsonl"
     static_dir = tmp_path / "static"
     export_dir = tmp_path / "exports"
+    voice_inbox_path = tmp_path / "voice_inbox.json"
+    voice_upload_dir = tmp_path / "voice_uploads"
     static_dir.mkdir(parents=True, exist_ok=True)
     export_dir.mkdir(parents=True, exist_ok=True)
     (static_dir / "index.html").write_text("<html></html>", encoding="utf-8")
@@ -98,10 +101,15 @@ def build_client(
         turn_log_path=turn_log,
         static_dir=static_dir,
         export_dir=export_dir,
+        voice_inbox_path=voice_inbox_path,
+        voice_upload_dir=voice_upload_dir,
+        reviewer_token=reviewer_token,
         governance_policy=policy,
         purge_state_path=tmp_path / "purge_state.json",
     )
     client = TestClient(app)
+    if reviewer_token:
+        client.headers.update({"X-Reviewer-Token": reviewer_token})
     if reviewer_id:
         client.headers.update({"X-Reviewer-ID": reviewer_id})
     return client
@@ -135,7 +143,7 @@ def test_chat_endpoint_rejects_invalid_reviewer_id(tmp_path: Path) -> None:
     response = client.post(
         "/api/chat",
         json={"message": "weather tomorrow"},
-        headers={"X-Reviewer-ID": "!"},
+        headers={"X-Reviewer-ID": "!", "X-Reviewer-Token": "secret-token"},
     )
     assert response.status_code == 400
 
@@ -203,6 +211,27 @@ def test_data_store_endpoints_use_tools(tmp_path: Path) -> None:
     mutate = client.post("/api/data/todos", json={"action": "update", "id": "1", "status": "completed"})
     assert mutate.status_code == 200
     assert orchestrator.tool_calls[-1] == ("todo_list", {"action": "update", "id": "1", "status": "completed"})
+
+
+def test_speech_endpoint_runs_chat_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = build_client(tmp_path)
+
+    from app import web_api
+
+    monkeypatch.setattr(web_api, "_transcribe_audio_bytes", lambda payload, filename: "voice memo", raising=False)
+
+    response = client.post(
+        "/api/speech",
+        files={"audio": ("memo.webm", b"fake-bytes", "audio/webm")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["transcription_status"] == "completed"
+    assert payload["text"] == "voice memo"
+    assert payload["chat"]["reply"] == "It is sunny"
+    assert payload["pending_id"]
+    inbox_rows = json.loads(client.app.state.voice_inbox_path.read_text(encoding="utf-8"))
+    assert inbox_rows[-1]["pending_id"] == payload["pending_id"]
 
 
 def test_label_endpoint_blocks_disallowed_tool(tmp_path: Path) -> None:

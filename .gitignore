@@ -6,3 +6,4 @@ models/
 .DS_Store
 .vscode/
 *.log
+data_pipeline/voice_uploads/

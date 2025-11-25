@@ -188,12 +188,17 @@ class AppGuideStore:
         existing = sections.get(entry_id)
         if not existing:
             raise ValueError(f"Section '{entry_id}' does not exist.")
+        normalized_keywords = [
+            kw.strip()
+            for kw in (keywords if keywords is not None else existing.keywords or [])
+            if kw and kw.strip()
+        ]
         entry = GuideEntry(
             id=entry_id,
             title=title or existing.title,
             content=content,
             updated_at=_utc_timestamp(),
-            keywords=[kw.strip() for kw in (keywords or existing.keywords or []) if kw.strip()],
+            keywords=normalized_keywords,
             link=link if link is not None else existing.link,
         )
         if not dry_run:

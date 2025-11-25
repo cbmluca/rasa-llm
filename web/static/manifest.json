@@ -1,0 +1,23 @@
+{
+  "name": "Taskmaster",
+  "short_name": "Taskmaster",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "description": "Tier-7 reviewer console with Chrome-only voice capture.",
+  "icons": [
+    {
+      "src": "/static/icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

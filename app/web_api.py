@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+import io
 import json
 import os
 import tempfile
@@ -9,6 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import logging
 import re
@@ -23,8 +26,12 @@ from app.config import (
     get_default_reviewer_id,
     get_governance_path,
     get_labeled_queue_path,
+    get_llm_api_key,
     get_review_queue_path,
+    get_reviewer_token,
+    get_speech_to_text_model,
     get_turn_log_path,
+    get_voice_inbox_path,
 )
 from app.main import build_orchestrator
 from core.data_views import (
@@ -50,6 +57,7 @@ from core.intent_config import load_intent_config
 from core.tooling.store_config import DATA_STORE_TO_TOOL, TOOL_TO_STORE, is_mutating_action
 from core.text_utils import hash_text
 from core.governance import GovernancePolicy, GovernancePolicyViolation
+from core.voice_inbox import append_voice_inbox_entry, build_voice_entry
 
 REVIEWER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{2,64}$")
 logger = logging.getLogger(__name__)
@@ -60,7 +68,58 @@ CLASSIFIER_REPORT_PATH = Path("reports/intent_classifier.json")
 
 STATIC_DIR = Path("web/static")
 EXPORT_DIR = Path("data_pipeline/nlu_training_bucket/exports")
+VOICE_UPLOAD_DIR = Path("data_pipeline/voice_uploads")
 
+
+class SpeechServiceError(Exception):
+    """Raised when a speech transcription request cannot complete."""
+
+
+_CONTENT_TYPE_EXTENSIONS = {
+    "audio/webm": ".webm",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+}
+
+
+def _infer_extension(filename: Optional[str], content_type: Optional[str]) -> str:
+    suffix = Path(filename or "").suffix if filename else ""
+    if suffix:
+        return suffix.lower()
+    if content_type:
+        return _CONTENT_TYPE_EXTENSIONS.get(content_type.lower(), ".webm")
+    return ".webm"
+
+
+def _transcribe_audio_bytes(payload: bytes, filename: str) -> str:
+    """Call OpenAI Whisper (or equivalent) and return the transcript text."""
+
+    api_key = get_llm_api_key()
+    if not api_key:
+        raise SpeechServiceError("OPENAI_API_KEY is required for speech uploads.")
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise SpeechServiceError("OpenAI package is not installed.") from exc
+
+    model = get_speech_to_text_model()
+    client = OpenAI(api_key=api_key)
+    buffer = io.BytesIO(payload)
+    buffer.name = filename
+    try:
+        response = client.audio.transcriptions.create(model=model, file=buffer)
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        raise SpeechServiceError(f"Transcription request failed: {exc}") from exc
+
+    text: Optional[str]
+    if isinstance(response, dict):  # legacy client
+        text = response.get("text")
+    else:
+        text = getattr(response, "text", None)
+    if not text:
+        raise SpeechServiceError("Transcription response did not include text.")
+    return str(text).strip()
 
 
 class ChatRequest(BaseModel):
@@ -207,6 +266,9 @@ def create_app(
     turn_log_path: Optional[Path] = None,
     static_dir: Optional[Path] = None,
     export_dir: Optional[Path] = None,
+    voice_inbox_path: Optional[Path] = None,
+    voice_upload_dir: Optional[Path] = None,
+    reviewer_token: Optional[str] = None,
     governance_policy: Optional[GovernancePolicy] = None,
     purge_state_path: Optional[Path] = None,
 ) -> FastAPI:
@@ -226,14 +288,21 @@ def create_app(
     turn_log = turn_log_path or get_turn_log_path()
     static_root = static_dir or STATIC_DIR
     exports_root = export_dir or EXPORT_DIR
+    inbox_path = voice_inbox_path or get_voice_inbox_path()
+    uploads_dir = voice_upload_dir or VOICE_UPLOAD_DIR
     policy = governance_policy or GovernancePolicy(get_governance_path())
     purge_state = purge_state_path or PURGE_STATE_PATH
+    token = reviewer_token if reviewer_token is not None else get_reviewer_token()
 
     rehydrate_labeled_prompts(labeled_path=labeled, pending_path=pending)
     dedupe_pending_prompts(pending)
 
     static_root.mkdir(parents=True, exist_ok=True)
     exports_root.mkdir(parents=True, exist_ok=True)
+    inbox_path.parent.mkdir(parents=True, exist_ok=True)
+    if not inbox_path.exists():
+        inbox_path.write_text("[]", encoding="utf-8")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="Tier-5 Web API", version="1.0.0")
     app.state.orchestrator = orch
@@ -243,8 +312,11 @@ def create_app(
     app.state.turn_log_path = turn_log
     app.state.static_root = static_root
     app.state.export_root = exports_root
+    app.state.voice_inbox_path = inbox_path
+    app.state.voice_upload_dir = uploads_dir
     app.state.governance_policy = policy
     app.state.default_reviewer_id = get_default_reviewer_id()
+    app.state.reviewer_token = token
     app.state.purge_state_path = purge_state
 
     app.mount("/static", StaticFiles(directory=static_root, check_dir=False), name="static")
@@ -266,6 +338,62 @@ def create_app(
             return candidate
         logger.warning("Reviewer ID missing on %s; defaulting to '%s'.", request.url.path, default_id)
         return default_id
+
+    def _require_reviewer_token(request: Request) -> None:
+        """Enforce the shared reviewer token when configured."""
+
+        expected = app.state.reviewer_token
+        if not expected:
+            return
+        provided = request.headers.get("x-reviewer-token") or request.query_params.get("reviewer_token")
+        if not provided or not provided.strip():
+            raise HTTPException(status_code=401, detail="Reviewer token missing. Include X-Reviewer-Token.")
+        candidate = provided.strip()
+        if not hmac.compare_digest(candidate, expected):
+            raise HTTPException(status_code=403, detail="Reviewer token is invalid.")
+
+    def _handle_chat_submission(message: str, reviewer_id: str, *, submission_reason: str) -> Dict[str, Any]:
+        """Run a chat message through the orchestrator + pending queue plumbing."""
+
+        clean = (message or "").strip()
+        if not clean:
+            raise HTTPException(status_code=400, detail="Message is required.")
+        result = app.state.orchestrator.handle_message_with_details(clean)
+        formatted = _format_response(result)
+        policy_version = app.state.governance_policy.policy_version
+        formatted_extras = dict(formatted.get("extras") or {})
+        formatted_extras.setdefault("policy_version", policy_version)
+        formatted_extras.setdefault("reviewer_id", reviewer_id)
+        formatted["extras"] = formatted_extras
+        formatted["policy_version"] = policy_version
+        formatted["reviewer_id"] = reviewer_id
+        review_reason = formatted.get("review_reason") or submission_reason or "chat_submission"
+        formatted["review_reason"] = review_reason
+        history_prompts = [
+            entry.get("user_text", "")
+            for entry in formatted_extras.get("conversation_history") or []
+            if isinstance(entry, dict) and entry.get("user_text")
+        ]
+        try:
+            pending_result = append_pending_prompt(
+                pending_path=app.state.pending_path,
+                message=clean,
+                intent=result.nlu_result.intent,
+                parser_payload=result.nlu_result.entities,
+                confidence=result.nlu_result.confidence,
+                reason=review_reason,
+                extras=formatted_extras,
+                tool_name=formatted.get("tool", {}).get("name"),
+                staged=formatted_extras.get("staged", False),
+                related_prompts=history_prompts,
+                conversation_entry_id=formatted_extras.get("conversation_entry_id"),
+                reviewer_id=reviewer_id,
+            )
+            if pending_result.get("record"):
+                formatted["pending_record"] = pending_result["record"]
+        except Exception:
+            pass
+        return formatted
 
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
@@ -296,54 +424,77 @@ def create_app(
 
     @app.post("/api/chat")
     def chat(payload: ChatRequest, request: Request) -> Dict[str, Any]:
-        """WHAT: bridge user chat to Tier‑1 and seed the pending queue.
+        """WHAT: bridge user chat to Tier‑1 and seed the pending queue."""
 
-        WHY: every dashboard submission should run through the orchestrator so
-        logging, probes, and dry-run semantics mirror the CLI/session behavior.
-        HOW: run ``handle_message_with_details``, normalize extras/history, and
-        persist a pending record (with conversation metadata) for reviewers.
-        """
-        message = payload.message.strip()
-        if not message:
-            raise HTTPException(status_code=400, detail="Message is required.")
+        _require_reviewer_token(request)
         reviewer_id = _resolve_reviewer_id(request)
-        result = app.state.orchestrator.handle_message_with_details(message)
-        formatted = _format_response(result)
-        policy_version = app.state.governance_policy.policy_version
-        formatted_extras = dict(formatted.get("extras") or {})
-        formatted_extras.setdefault("policy_version", policy_version)
-        formatted_extras.setdefault("reviewer_id", reviewer_id)
-        formatted["extras"] = formatted_extras
-        formatted["policy_version"] = policy_version
-        formatted["reviewer_id"] = reviewer_id
-        history_prompts = [
-            entry.get("user_text", "")
-            for entry in formatted_extras.get("conversation_history") or []
-            if isinstance(entry, dict) and entry.get("user_text")
-        ]
+        return _handle_chat_submission(payload.message, reviewer_id, submission_reason="chat_submission")
+
+    @app.post("/api/speech")
+    async def speech(request: Request, audio: UploadFile = File(...)) -> Dict[str, Any]:
+        """WHAT: accept short recordings, transcribe them, and reuse chat flow."""
+
+        _require_reviewer_token(request)
+        reviewer_id = _resolve_reviewer_id(request)
+        if audio is None:
+            raise HTTPException(status_code=400, detail="Audio file is required.")
+        payload = await audio.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Audio file cannot be empty.")
+        entry_id = uuid4().hex
+        ext = _infer_extension(audio.filename, audio.content_type)
+        upload_dir: Path = app.state.voice_upload_dir
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = upload_dir / f"{entry_id}{ext}"
+        audio_path.write_bytes(payload)
+
+        transcription_status = "error"
+        transcription_text = ""
+        pending_id: Optional[str] = None
+        chat_payload: Optional[Dict[str, Any]] = None
+        error_detail: Optional[str] = None
+
         try:
-            pending_result = append_pending_prompt(
-                pending_path=app.state.pending_path,
-                message=message,
-                intent=result.nlu_result.intent,
-                parser_payload=result.nlu_result.entities,
-                confidence=result.nlu_result.confidence,
-                reason=formatted.get("review_reason") or "chat_submission",
-                extras=formatted_extras,
-                tool_name=formatted.get("tool", {}).get("name"),
-                staged=formatted_extras.get("staged", False),
-                related_prompts=history_prompts,
-                conversation_entry_id=formatted_extras.get("conversation_entry_id"),
-                reviewer_id=reviewer_id,
+            transcription_text = _transcribe_audio_bytes(payload, audio_path.name)
+            transcription_status = "completed"
+            chat_payload = _handle_chat_submission(
+                transcription_text,
+                reviewer_id,
+                submission_reason="voice_submission",
             )
-            if pending_result.get("record"):
-                formatted["pending_record"] = pending_result["record"]
-        except Exception:
-            pass
-        return formatted
+            pending_record = chat_payload.get("pending_record") or {}
+            pending_id = pending_record.get("id")
+        except SpeechServiceError as exc:
+            error_detail = str(exc)
+            transcription_text = ""
+            transcription_status = "error"
+
+        voice_entry = append_voice_inbox_entry(
+            app.state.voice_inbox_path,
+            build_voice_entry(
+                entry_id=entry_id,
+                audio_path=audio_path,
+                text=transcription_text,
+                status=transcription_status,
+                reviewer_id=reviewer_id,
+                pending_id=pending_id,
+            ),
+        )
+
+        response: Dict[str, Any] = {
+            "transcription_status": transcription_status,
+            "text": transcription_text,
+            "pending_id": pending_id,
+            "voice_entry": voice_entry.to_dict(),
+        }
+        if chat_payload is not None:
+            response["chat"] = chat_payload
+        if error_detail:
+            response["error"] = error_detail
+        return response
 
     @app.get("/api/logs/pending")
-    def pending_logs(limit: int = 25, page: int = 1) -> Dict[str, Any]:
+    def pending_logs(request: Request, limit: int = 25, page: int = 1) -> Dict[str, Any]:
         """WHAT: fetch paginated pending prompts for Tier‑5 reviewers.
 
         WHY: the queue drives the dashboard cards; exposing pagination keeps the
@@ -351,6 +502,7 @@ def create_app(
         HOW: cap page/limit inputs, call ``list_pending_with_hashes`` to ensure
         prompt ids/hashes exist, and augment response with queue summary/flags.
         """
+        _require_reviewer_token(request)
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
@@ -368,7 +520,7 @@ def create_app(
         }
 
     @app.get("/api/logs/classifier")
-    def classifier_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
+    def classifier_logs(request: Request, limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
         """WHAT: surface classifier mistakes/misses for manual QA.
 
         WHY: reviewers triage low-confidence or incorrect classifier turns to
@@ -376,6 +528,7 @@ def create_app(
         HOW: delegate to ``review_classifier_predictions`` which filters the
         turn log plus labeled file for interesting entries.
         """
+        _require_reviewer_token(request)
         findings = review_classifier_predictions(
             turn_log=app.state.turn_log_path,
             labeled_path=app.state.labeled_path,
@@ -385,7 +538,7 @@ def create_app(
         return {"items": findings}
 
     @app.get("/api/logs/labeled")
-    def labeled_logs(limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
+    def labeled_logs(request: Request, limit: int = 25, intent: Optional[str] = None) -> Dict[str, Any]:
         """WHAT: provide labeled samples for the Training tab.
 
         WHY: analysts export batches of reviewer labels when retraining NLU
@@ -393,11 +546,12 @@ def create_app(
         HOW: call ``load_labeled_prompts`` with limit/intent filters and return
         the resulting list.
         """
+        _require_reviewer_token(request)
         records = load_labeled_prompts(app.state.labeled_path, limit=max(1, min(limit, 200)), intent=intent)
         return {"items": records}
 
     @app.get("/api/logs/corrected")
-    def corrected_logs(limit: int = 25, page: int = 1, intent: Optional[str] = None) -> Dict[str, Any]:
+    def corrected_logs(request: Request, limit: int = 25, page: int = 1, intent: Optional[str] = None) -> Dict[str, Any]:
         """WHAT: paginate the corrected prompts JSONL for dashboard tables.
 
         WHY: Tier‑5 needs to browse reviewer corrections chronologically and
@@ -405,6 +559,7 @@ def create_app(
         HOW: rely on ``load_corrected_prompts`` for pagination/filtering and
         return its structured dict (items + counts).
         """
+        _require_reviewer_token(request)
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         data = load_corrected_prompts(
@@ -416,7 +571,7 @@ def create_app(
         return data
 
     @app.delete("/api/logs/corrected/{record_id}")
-    def delete_corrected(record_id: str) -> Dict[str, Any]:
+    def delete_corrected(record_id: str, request: Request) -> Dict[str, Any]:
         """WHAT: remove corrected prompt rows that are no longer needed.
 
         WHY: experiments occasionally seed synthetic or duplicate labels; this
@@ -455,6 +610,7 @@ def create_app(
         action mutates data, append a correction entry, drop pending rows (plus
         related prompts), and update conversation memory when available.
         """
+        _require_reviewer_token(request)
         reviewer_id = _resolve_reviewer_id(request)
         reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
         corrected_payload = dict(payload.corrected_payload or {})
@@ -527,7 +683,7 @@ def create_app(
         }
 
     @app.delete("/api/logs/pending/{prompt_id}")
-    def delete_pending(prompt_id: str) -> Dict[str, Any]:
+    def delete_pending(prompt_id: str, request: Request) -> Dict[str, Any]:
         """WHAT: discard pending queue entries without labeling them.
 
         WHY: some prompts are OOD or duplicates; reviewers need to drop them so
@@ -535,6 +691,7 @@ def create_app(
         HOW: call ``delete_pending_entry`` with the provided id/hash and return
         a confirmation or 404 when nothing matched.
         """
+        _require_reviewer_token(request)
         if not prompt_id:
             raise HTTPException(status_code=400, detail="prompt_id is required.")
         removed = delete_pending_entry(app.state.pending_path, prompt_id)
@@ -543,7 +700,7 @@ def create_app(
         return {"deleted": True}
 
     @app.get("/api/intents")
-    def list_intents() -> Dict[str, Any]:
+    def list_intents(request: Request) -> Dict[str, Any]:
         """WHAT: expose current intent/action definitions for the UI.
 
         WHY: dropdowns in the Pending card and correction forms need canonical
@@ -551,6 +708,7 @@ def create_app(
         HOW: load ``intent_config`` and return both the string list and action
         per intent map.
         """
+        _require_reviewer_token(request)
         config = load_intent_config()
         return {
             "intents": config.names(),
@@ -558,7 +716,7 @@ def create_app(
         }
 
     @app.post("/api/logs/export")
-    def export_prompts(fmt: str = "csv", dedupe: bool = True) -> Dict[str, Any]:
+    def export_prompts(request: Request, fmt: str = "csv", dedupe: bool = True) -> Dict[str, Any]:
         """WHAT: snapshot pending prompts for offline analysis.
 
         WHY: analysts need to copy the queue into spreadsheets for audits or
@@ -566,6 +724,7 @@ def create_app(
         HOW: validate format, call ``export_pending`` into a timestamped folder,
         and translate output paths into mount-relative URLs for download.
         """
+        _require_reviewer_token(request)
         fmt = fmt.lower()
         if fmt not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -590,7 +749,7 @@ def create_app(
         return {"summary": base_summary, "files": files}
 
     @app.post("/api/logs/import")
-    async def import_labels(file: UploadFile = File(...), fmt: str = Form("csv"), dedupe: bool = Form(True)) -> Dict[str, Any]:
+    async def import_labels(request: Request, file: UploadFile = File(...), fmt: str = Form("csv"), dedupe: bool = Form(True)) -> Dict[str, Any]:
         """WHAT: bulk ingest CSV/JSON labels exported from spreadsheets.
 
         WHY: Tier‑5 reviewers may label prompts offline; importing batches keeps
@@ -598,6 +757,7 @@ def create_app(
         HOW: persist upload to a temp file, call ``append_labels`` with format
         metadata, and delete the temp file regardless of success.
         """
+        _require_reviewer_token(request)
         fmt_value = fmt.lower()
         if fmt_value not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -621,7 +781,7 @@ def create_app(
         return outcome
 
     @app.get("/api/data/{store_id}")
-    def list_store(store_id: str) -> Dict[str, Any]:
+    def list_store(store_id: str, request: Request) -> Dict[str, Any]:
         """WHAT: expose tool-backed list actions for the Data Stores tab.
 
         WHY: reviewers preview current JSON stores (todos, calendar, etc.)
@@ -629,6 +789,7 @@ def create_app(
         HOW: map ``store_id`` to a tool via ``DATA_STORE_TO_TOOL`` and run the
         orchestrator with its list payload.
         """
+        _require_reviewer_token(request)
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -637,7 +798,7 @@ def create_app(
         return result
 
     @app.post("/api/data/{store_id}")
-    def mutate_store(store_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def mutate_store(store_id: str, payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         """WHAT: allow direct CRUD mutations from the Data Stores tab.
 
         WHY: admins occasionally fix data without walkthrough prompts; this
@@ -645,6 +806,7 @@ def create_app(
         HOW: validate payload shape, ensure the store is known, forward the
         request to the corresponding tool, and bubble up tool errors as HTTP 400.
         """
+        _require_reviewer_token(request)
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -658,7 +820,7 @@ def create_app(
         return result
 
     @app.get("/api/stats")
-    def stats() -> Dict[str, Any]:
+    def stats(request: Request) -> Dict[str, Any]:
         """WHAT: aggregate pending/labeled stats for dashboard cards.
 
         WHY: reviewers rely on the home view to gauge queue health and model
@@ -666,6 +828,7 @@ def create_app(
         HOW: call ``summarize_pending_queue``, count corrected rows, sample
         recent pending entries, and optionally include the classifier report.
         """
+        _require_reviewer_token(request)
         pending_summary = summarize_pending_queue(app.state.pending_path)
         corrected_count = count_jsonl_rows(app.state.corrected_path)
         classifier_report = _read_json_if_exists(CLASSIFIER_REPORT_PATH)

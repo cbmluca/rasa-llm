@@ -27,6 +27,7 @@ _TURN_LOG_FILENAME = "turns.jsonl"
 _REVIEW_QUEUE_FILENAME = "pending.jsonl"
 _LABELED_QUEUE_FILENAME = "labeled_prompts.jsonl"
 _CORRECTED_QUEUE_FILENAME = "corrected_prompts.jsonl"
+_DEFAULT_VOICE_INBOX_PATH = "data_pipeline/voice_inbox.json"
 _DEFAULT_LOG_REDACTION_PATTERNS = "email,phone,credit_card,gov_id,url"
 _DEFAULT_LOG_MAX_BYTES = 1_000_000
 _DEFAULT_LOG_BACKUP_COUNT = 5
@@ -37,6 +38,8 @@ _DEFAULT_WEB_UI_HOST = "127.0.0.1"
 _DEFAULT_WEB_UI_PORT = 9000
 _DEFAULT_GOVERNANCE_PATH = "config/governance.yml"
 _DEFAULT_REVIEWER_ID = "anonymous"
+_DEFAULT_REVIEWER_TOKEN = None
+_DEFAULT_SPEECH_TO_TEXT_MODEL = "gpt-4o-mini-transcribe"
 
 # ---------------------------------------------------------------------------
 # Accessors for static defaults
@@ -127,6 +130,14 @@ def get_corrected_prompts_path(env: Dict[str, str] | None = None) -> Path:
     """Return the path that stores parser-vs-corrected prompt pairs."""
 
     return get_review_queue_dir(env) / _CORRECTED_QUEUE_FILENAME
+
+
+def get_voice_inbox_path(env: Dict[str, str] | None = None) -> Path:
+    """Return the JSON file used to store Tier-7 voice inbox entries."""
+
+    source = env if env is not None else os.environ
+    override = source.get("VOICE_INBOX_PATH")
+    return Path(override) if override else Path(_DEFAULT_VOICE_INBOX_PATH)
 
 
 def is_log_redaction_enabled(env: Dict[str, str] | None = None) -> bool:
@@ -248,3 +259,21 @@ def get_default_reviewer_id(env: Dict[str, str] | None = None) -> str:
 
     source = env if env is not None else os.environ
     return source.get("DEFAULT_REVIEWER_ID", _DEFAULT_REVIEWER_ID)
+
+
+def get_speech_to_text_model(env: Dict[str, str] | None = None) -> str:
+    """Return the model identifier used for Whisper/STT requests."""
+
+    source = env if env is not None else os.environ
+    return source.get("SPEECH_TO_TEXT_MODEL", _DEFAULT_SPEECH_TO_TEXT_MODEL)
+
+
+def get_reviewer_token(env: Dict[str, str] | None = None) -> str | None:
+    """Return the shared reviewer token required for web API calls."""
+
+    source = env if env is not None else os.environ
+    token = source.get("REVIEWER_TOKEN")
+    if token:
+        return token.strip()
+    default = _DEFAULT_REVIEWER_TOKEN
+    return default if default is None else str(default)
