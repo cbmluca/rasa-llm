@@ -1,4 +1,4 @@
-"""App Guide intent parsing."""
+"""Notes intent parsing."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from core.text_parsing import extract_quoted_strings
 from core.parsers.types import CommandResult
 
 
-    # WHAT: ensure prompts mention “app guide” or “knowledge” before parsing.
+    # WHAT: ensure prompts mention “notes”/“app guide” or “knowledge” before parsing.
     # WHY: avoids extra work when the utterance clearly targets another tool.
     # HOW: simple substring checks.
 def matches(lowered: str) -> bool:
-    return "app guide" in lowered or "knowledge" in lowered
+    return "notes" in lowered or "app guide" in lowered or "knowledge" in lowered
 
 
     # WHAT: map knowledge prompts to list/find/create/update/delete actions.
-    # WHY: App Guide entries are managed via chat, so we need deterministic parsing.
+    # WHY: Notes entries are managed via chat, so we need deterministic parsing.
     # HOW: look for verbs (delete/update/create/find), use quoted strings or “section …” phrasing to populate ids/titles/content.
 def parse(message: str, lowered: str) -> Optional[CommandResult]:
     payload: Dict[str, object] = {"message": message, "domain": "knowledge"}
@@ -49,6 +49,9 @@ def parse(message: str, lowered: str) -> Optional[CommandResult]:
 
     if any(word in lowered for word in ("create", "add", "new", "write")):
         payload["action"] = "create"
+        payload["insert_mode"] = "bottom" if any(
+            phrase in lowered for phrase in ("append", "bottom", "at the end")
+        ) else "top"
         if quotes:
             payload["id"] = quotes[0]
             if len(quotes) > 1:

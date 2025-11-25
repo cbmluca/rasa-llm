@@ -77,6 +77,13 @@ const FIELD_LIBRARY = {
   id: { label: 'ID' },
 };
 
+function getFieldLabel(tool, field) {
+  if (tool === 'app_guide' && field === 'title') {
+    return 'Section';
+  }
+  return FIELD_LIBRARY[field]?.label || field;
+}
+
 const TOOL_REQUIRED_FIELDS = {
   todo_list: ['title'],
   calendar_edit: ['title', 'start'],
@@ -123,7 +130,7 @@ const TOOL_ACTION_FIELD_CONFIG = {
   app_guide: {
     list: { fields: [], required: [] },
     find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['id', 'title', 'content', 'keywords', 'link'], required: ['title', 'content'] },
+    create: { fields: ['title', 'content', 'keywords', 'link'], required: ['title', 'content'] },
     update: { fields: ['id', 'title', 'content', 'keywords', 'link'], required: ['id'] },
     delete: { fields: ['id', 'title'], required: ['id'] },
   },
@@ -296,6 +303,46 @@ const FIELD_LAYOUTS = {
   },
 };
 
+// WHAT: bootstrap the state slice for a todo CRUD action.
+// WHY: both create/update forms track their own draft values independent of pending corrections.
+// HOW: seed action metadata plus value/display objects.
+function createTodoFormState(action) {
+  return {
+    action,
+    values: {},
+    display: {},
+  };
+}
+
+function createCalendarFormState(action) {
+  return {
+    action,
+    values: {},
+    display: {},
+    datetime: {},
+  };
+}
+
+function createKitchenFormState(action) {
+  return {
+    action,
+    values: {},
+  };
+}
+
+function getNoteSectionTitles() {
+  return (state.dataStores.app_guide || [])
+    .map((entry) => (entry.title || '').trim())
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+}
+
+const NOTES_SECTION_DATALIST_ID = 'notes-section-options';
+
+function disableAutofill() {
+  document.querySelectorAll('form').forEach((form) => form.setAttribute('autocomplete', 'off'));
+  document.querySelectorAll('input, textarea').forEach((field) => field.setAttribute('autocomplete', 'off'));
+}
+
 const STORAGE_KEYS = {
   ACTIVE_PAGE: 'tier5_active_page',
   PENDING_PAGE: 'tier5_pending_page',
@@ -305,9 +352,14 @@ const STORAGE_KEYS = {
   REVIEWER_ID: 'tier5_reviewer_id',
   LAST_PURGE_ALERT_SIGNATURE: 'tier5_last_purge_alert_signature',
   LAST_TRAINING_ALERT_COUNT: 'tier5_last_training_alert_count',
+  DATA_ACTIVE_TAB: 'tier5_data_active_tab',
+  DATA_SELECTED_ROWS: 'tier5_data_selected_rows',
 };
 
 let pollTimer;
+
+const DATA_STORE_IDS = ['todos', 'calendar', 'kitchen_tips', 'app_guide'];
+const SELECTABLE_DATA_STORES = new Set(['todos', 'calendar', 'kitchen_tips']);
 
 const state = {
   chat: [],
@@ -336,6 +388,29 @@ const state = {
     kitchen_tips: [],
     app_guide: [],
   },
+  selectedRows: {
+    todos: null,
+    calendar: null,
+    kitchen_tips: null,
+  },
+  todoCrud: {
+    create: createTodoFormState('create'),
+    update: createTodoFormState('update'),
+    activeAction: 'create',
+  },
+  calendarCrud: {
+    create: createCalendarFormState('create'),
+    update: createCalendarFormState('update'),
+    activeAction: 'create',
+  },
+  kitchenCrud: {
+    create: createKitchenFormState('create'),
+    update: createKitchenFormState('update'),
+    activeAction: 'create',
+  },
+  todoSort: { column: 'deadline', direction: 'asc' },
+  calendarSort: { column: 'end', direction: 'desc' },
+  kitchenSort: { column: 'title', direction: 'asc' },
   activeDataTab: 'todos',
   reviewerId: '',
   notifications: [],
@@ -375,12 +450,27 @@ const el = {
   dataPanels: document.querySelectorAll('.data-panel-view'),
   dataRefresh: document.querySelector('#data-refresh'),
   todosPanel: document.querySelector('#todos-panel'),
+  todoCrudGrid: document.querySelector('#todo-crud-grid'),
+  todoCrudForm: document.querySelector('#todo-crud-form'),
+  todoCrudSubmit: document.querySelector('#todo-crud-submit'),
+  todoCrudTitle: document.querySelector('#todo-crud-title'),
+  todoCrudReset: document.querySelector('#todo-reset-button'),
+  todoSortButtons: document.querySelectorAll('[data-todo-sort]'),
   calendarPanel: document.querySelector('#calendar-panel'),
-  kitchenList: document.querySelector('#kitchen-list'),
+  calendarSortButtons: document.querySelectorAll('[data-calendar-sort]'),
+  calendarCrudForm: document.querySelector('#calendar-crud-form'),
+  calendarCrudGrid: document.querySelector('#calendar-crud-grid'),
+  calendarCrudSubmit: document.querySelector('#calendar-crud-submit'),
+  calendarCrudTitle: document.querySelector('#calendar-crud-title'),
+  calendarCrudReset: document.querySelector('#calendar-reset-button'),
+  kitchenPanel: document.querySelector('#kitchen-panel'),
+  kitchenCrudForm: document.querySelector('#kitchen-crud-form'),
+  kitchenCrudGrid: document.querySelector('#kitchen-crud-grid'),
+  kitchenCrudSubmit: document.querySelector('#kitchen-crud-submit'),
+  kitchenCrudTitle: document.querySelector('#kitchen-crud-title'),
+  kitchenCrudReset: document.querySelector('#kitchen-reset-button'),
+  kitchenSortButtons: document.querySelectorAll('[data-kitchen-sort]'),
   guideList: document.querySelector('#guide-list'),
-  todoForm: document.querySelector('#todo-form'),
-  kitchenForm: document.querySelector('#kitchen-form'),
-  calendarForm: document.querySelector('#calendar-form'),
   guideForm: document.querySelector('#guide-form'),
   classifierTable: document.querySelector('#classifier-table tbody'),
   classifierRefresh: document.querySelector('#classifier-refresh'),
@@ -504,6 +594,86 @@ function getReviewerId() {
     // ignore
   }
   return '';
+}
+
+function persistActiveDataTab() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.DATA_ACTIVE_TAB, state.activeDataTab || 'todos');
+  } catch (err) {
+    // ignore persistence failures
+  }
+}
+
+function restoreActiveDataTab() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.DATA_ACTIVE_TAB);
+    if (stored && DATA_STORE_IDS.includes(stored)) {
+      state.activeDataTab = stored;
+    }
+  } catch (err) {
+    // ignore
+  }
+}
+
+function persistSelectedDataRows() {
+  try {
+    const payload = JSON.stringify({
+      todos: state.selectedRows?.todos || null,
+      calendar: state.selectedRows?.calendar || null,
+      kitchen_tips: state.selectedRows?.kitchen_tips || null,
+    });
+    localStorage.setItem(STORAGE_KEYS.DATA_SELECTED_ROWS, payload);
+  } catch (err) {
+    // ignore
+  }
+}
+
+function restoreSelectedDataRows() {
+  if (!state.selectedRows) {
+    state.selectedRows = { todos: null, calendar: null, kitchen_tips: null };
+  }
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.DATA_SELECTED_ROWS);
+    if (!stored) {
+      return;
+    }
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object') {
+      state.selectedRows.todos = parsed.todos || null;
+      state.selectedRows.calendar = parsed.calendar || null;
+      state.selectedRows.kitchen_tips = parsed.kitchen_tips || null;
+    }
+  } catch (err) {
+    state.selectedRows.todos = null;
+    state.selectedRows.calendar = null;
+    state.selectedRows.kitchen_tips = null;
+  }
+}
+
+function getSelectedDataRow(store) {
+  return state.selectedRows?.[store] || null;
+}
+
+function setSelectedDataRow(store, id, options = {}) {
+  if (!SELECTABLE_DATA_STORES.has(store)) {
+    return;
+  }
+  if (!state.selectedRows) {
+    state.selectedRows = { todos: null, calendar: null };
+  }
+  state.selectedRows[store] = id ? String(id) : null;
+  if (options.persist !== false) {
+    persistSelectedDataRows();
+  }
+}
+
+function clearSelectedDataRow(store, options = {}) {
+  setSelectedDataRow(store, null, options);
+}
+
+function restoreDataPanelState() {
+  restoreActiveDataTab();
+  restoreSelectedDataRows();
 }
 
 // WHAT: standardize AJAX calls with JSON parsing and friendly errors.
@@ -1636,7 +1806,7 @@ function formatISODate(date) {
 // WHY: improves readability of the relative date datalist options.
 // HOW: call `toLocaleDateString` with day/month options.
 function formatDisplayDate(date) {
-  return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' });
+  return date.toLocaleDateString('da-DK', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 // WHAT: create a new Date offset by `amount` days.
@@ -1695,12 +1865,17 @@ function buildRelativeTimeOptions(baseDate) {
   ];
 }
 
+function stripOptionDisplaySuffix(value) {
+  if (!value || typeof value !== 'string') return value;
+  return value.replace(/\s*\([^)]*\)\s*$/, '').trim();
+}
+
 // WHAT: normalize free-form date text into ISO/keyword/display triples.
 // WHY: reviewers can type “tomorrow”, “12/05”, etc., and we still need canonical payloads.
 // HOW: check for known relative labels/ISO patterns first, otherwise fallback to raw text, so downstream serialization can decide whether to store ISO dates or conversational keywords.
 function parseDateInput(value, baseDate) {
   if (!value) return { iso: '', keyword: '', display: '' };
-  const trimmed = value.trim();
+  const trimmed = stripOptionDisplaySuffix(value).trim();
   const options = buildRelativeDateOptions(baseDate);
   const match = options.find((opt) => opt.label.toLowerCase() === trimmed.toLowerCase());
   if (match) {
@@ -1710,13 +1885,29 @@ function parseDateInput(value, baseDate) {
   if (isoMatch) {
     return { iso: trimmed, keyword: '', display: formatDisplayDate(new Date(trimmed)) };
   }
-  const shortMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{4}))?$/);
+  const shortMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2}|\d{4}))?$/);
   if (shortMatch) {
     const day = shortMatch[1].padStart(2, '0');
     const month = shortMatch[2].padStart(2, '0');
-    const year = shortMatch[3] || String(baseDate.getFullYear());
-    const iso = `${year}-${month}-${day}`;
-    return { iso, keyword: '', display: `${day}/${month}` };
+    const baseYear = baseDate.getFullYear();
+    const rawYear = shortMatch[3];
+    let yearNumber;
+    if (!rawYear) {
+      yearNumber = baseYear;
+    } else if (rawYear.length === 2) {
+      const baseCentury = Math.floor(baseYear / 100) * 100;
+      const parsed = Number(rawYear);
+      yearNumber = baseCentury + parsed;
+      if (yearNumber < baseYear - 50) {
+        yearNumber += 100;
+      } else if (yearNumber > baseYear + 50) {
+        yearNumber -= 100;
+      }
+    } else {
+      yearNumber = Number(rawYear);
+    }
+    const iso = `${String(yearNumber).padStart(4, '0')}-${month}-${day}`;
+    return { iso, keyword: '', display: formatDisplayDate(new Date(iso)) };
   }
   return { iso: '', keyword: trimmed.toLowerCase(), display: trimmed, label: trimmed };
 }
@@ -1726,7 +1917,7 @@ function parseDateInput(value, baseDate) {
 // HOW: favor explicit HH:MM strings, map common words (morning/now/etc.) to canonical times, otherwise carry the keyword so the backend knows it still needs clarification.
 function parseTimeInput(value) {
   if (!value) return { time: '', keyword: '' };
-  const trimmed = value.trim();
+  const trimmed = stripOptionDisplaySuffix(value).trim();
   const match = trimmed.match(/^(\d{1,2})(?::(\d{2}))?$/);
   if (match) {
     const hour = match[1].padStart(2, '0');
@@ -1749,6 +1940,39 @@ function parseTimeInput(value) {
     return { time: now.toTimeString().slice(0, 5), keyword: 'now' };
   }
   return { time: '', keyword: lower };
+}
+
+function normalizeCalendarDateInput(text) {
+  if (!text) return '';
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('T')) {
+    return trimmed;
+  }
+  const [datePart, timePart] = trimmed.split(/\s+/);
+  const dateInfo = parseDateInput(datePart, new Date());
+  if (!dateInfo.iso) {
+    return trimmed;
+  }
+  const timeInfo = parseTimeInput(timePart || '');
+  const timeValue = timeInfo.time || '09:00';
+  return `${dateInfo.iso}T${timeValue}`;
+}
+
+// WHAT: format ISO `YYYY-MM-DD` (optionally with time) strings as Danish `DD-MM-YYYY`.
+// WHY: reviewers operate in Danish locales and expect day-first ordering everywhere in the UI.
+// HOW: detect ISO-like strings, flip the components, preserve HH:MM if present, and fall back to the original text otherwise.
+function formatDanishDateString(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}))?/);
+  if (!match) {
+    return value;
+  }
+  const [, year, month, day, time] = match;
+  const dateText = `${day}-${month}-${year}`;
+  return time ? `${dateText} ${time}` : dateText;
 }
 
 // WHAT: auto-populate fields when a reviewer picks an entity from the dropdown.
@@ -2168,6 +2392,7 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
       .forEach((wrapper) => wrapper.classList.toggle('field-required', !hasValue));
   };
 
+  const baseLabel = getFieldLabel(intent, field);
   const buildDateInput = () => {
     const input = document.createElement('input');
     input.type = 'text';
@@ -2178,8 +2403,7 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
     dataList.id = listId;
     buildRelativeDateOptions(baseDate).forEach((opt) => {
       const option = document.createElement('option');
-      option.value = opt.label;
-      option.label = `${opt.label} (${opt.display})`;
+      option.value = `${opt.label} (${opt.display})`;
       dataList.appendChild(option);
     });
     input.addEventListener('focus', () => {
@@ -2214,8 +2438,7 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
     dataList.id = listId;
     buildRelativeTimeOptions(baseDate).forEach((opt) => {
       const option = document.createElement('option');
-      option.value = opt.label;
-      option.label = `${opt.label} (${opt.time})`;
+      option.value = `${opt.label} (${opt.time})`;
       dataList.appendChild(option);
     });
     input.addEventListener('focus', () => {
@@ -2245,12 +2468,14 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
     dateWrapper.className = 'field-wrapper datetime-field';
     dateWrapper.dataset.field = `${field}-date`;
     const dateLabel = document.createElement('span');
-    dateLabel.textContent = `${FIELD_LIBRARY[field]?.label || field} Date`;
+    dateLabel.textContent = `${baseLabel} Date`;
     dateWrapper.appendChild(dateLabel);
     dateWrapper.appendChild(buildDateInput());
     applyFieldLayout(dateWrapper, intent, action, `${field}-date`);
     targetGrid.appendChild(dateWrapper);
-    trackedWrappers.push(dateWrapper);
+    if (isRequired) {
+      trackedWrappers.push(dateWrapper);
+    }
 
     let timeWrapper = null;
     if (config.includeTime) {
@@ -2258,12 +2483,11 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
       timeWrapper.className = 'field-wrapper datetime-field';
       timeWrapper.dataset.field = `${field}-time`;
       const timeLabel = document.createElement('span');
-      timeLabel.textContent = `${FIELD_LIBRARY[field]?.label || field} Time`;
+      timeLabel.textContent = `${baseLabel} Time`;
       timeWrapper.appendChild(timeLabel);
       timeWrapper.appendChild(buildTimeInput());
       applyFieldLayout(timeWrapper, intent, action, `${field}-time`);
       targetGrid.appendChild(timeWrapper);
-      trackedWrappers.push(timeWrapper);
     }
     applyDateTimeFieldValue(field, config);
     updateRequiredState();
@@ -2274,7 +2498,7 @@ function renderDateTimeField(field, config, targetGrid = el.dynamicFieldGrid, is
   wrapper.className = 'field-wrapper datetime-field';
   wrapper.dataset.field = field;
   const mainLabel = document.createElement('span');
-  mainLabel.textContent = FIELD_LIBRARY[field]?.label || field;
+  mainLabel.textContent = baseLabel;
   wrapper.appendChild(mainLabel);
   const controls = document.createElement('div');
   controls.className = 'datetime-controls';
@@ -2581,7 +2805,7 @@ function renderDynamicFields(tool, action) {
       wrapper.classList.add('field-wrapper--full');
     }
     const label = document.createElement('span');
-    label.textContent = config.label || field;
+    label.textContent = getFieldLabel(tool, field);
     wrapper.appendChild(label);
     if (required && !fieldHasValue(state.correctionFields[field])) {
       wrapper.classList.add('field-required');
@@ -2707,6 +2931,10 @@ function renderDynamicFields(tool, action) {
         }
       }
     });
+    if (tool === 'app_guide' && field === 'title' && control.tagName === 'INPUT') {
+      control.setAttribute('autocomplete', 'off');
+      control.setAttribute('list', NOTES_SECTION_DATALIST_ID);
+    }
     wrapper.appendChild(control);
     applyFieldLayout(wrapper, tool, normalizedAction, field);
     targetGrid.appendChild(wrapper);
@@ -3381,26 +3609,1271 @@ function sortNewestFirst(list, key = 'timestamp') {
   });
 }
 
+// WHAT: ensure per-action todo CRUD state exists.
+// WHY: the Data Stores panel now hosts create/update editors that track their own values.
+// HOW: lazily materialize the state slice and guarantee a display map for fields (e.g., deadline text).
+function getTodoFormState(action) {
+  if (!state.todoCrud[action]) {
+    state.todoCrud[action] = createTodoFormState(action);
+  }
+  if (!state.todoCrud[action].display) {
+    state.todoCrud[action].display = {};
+  }
+  return state.todoCrud[action];
+}
+
+// WHAT: reset the todo CRUD form for the given action to its defaults.
+// WHY: after successful submissions we need a clean slate mirroring the pending editor behavior.
+// HOW: recreate the action's state bucket via `createTodoFormState`.
+function resetTodoForm(action) {
+  state.todoCrud[action] = createTodoFormState(action);
+}
+
+function getActiveTodoAction() {
+  return state.todoCrud.activeAction === 'update' ? 'update' : 'create';
+}
+
+function setTodoCrudAction(action) {
+  const normalized = action === 'update' ? 'update' : 'create';
+  state.todoCrud.activeAction = normalized;
+  if (normalized !== 'update') {
+    clearSelectedDataRow('todos');
+    renderTodos();
+  }
+  renderTodoCrudForm();
+}
+
+// WHAT: toggle submit button disabled state for todo forms.
+// WHY: reviewers shouldn't fire create/update without required fields (title/deadline/id).
+// HOW: validate the stored values per action config and flip the corresponding button.
+function updateTodoFormButtonState(action) {
+  const button = el.todoCrudSubmit;
+  if (!button) return;
+  const targetAction = action || getActiveTodoAction();
+  const formState = getTodoFormState(targetAction);
+  const requiredFields = TOOL_ACTION_FIELD_CONFIG.todo_list?.[targetAction]?.required || [];
+  const isValid = requiredFields.every((field) => fieldHasValue(formState.values[field]));
+  button.disabled = !isValid;
+}
+
+// WHAT: update a field inside the todo CRUD state.
+// WHY: dynamic inputs need to keep state in sync so payloads serialize correctly.
+// HOW: optionally trim strings, drop empty values, and re-run validation when a value changes.
+function setTodoFormValue(action, field, value, options = {}) {
+  if (!field) return;
+  const formState = getTodoFormState(action);
+  let next = value;
+  if (typeof next === 'string' && !options.preserveSpacing) {
+    next = next.trim();
+  }
+  if (next === '' || next === null || next === undefined) {
+    delete formState.values[field];
+  } else {
+    formState.values[field] = next;
+  }
+  updateTodoFormButtonState(action);
+}
+
+// WHAT: capture date input text for deadline fields and normalize to ISO when possible.
+// WHY: the UI accepts natural language (“tomorrow”) but the tool prefers canonical dates.
+// HOW: persist the raw text for display and run it through `parseDateInput` to populate the payload value.
+function handleTodoDeadlineInput(action, field, text) {
+  const formState = getTodoFormState(action);
+  if (!formState.display) {
+    formState.display = {};
+  }
+  formState.display[field] = text;
+  const trimmed = text.trim();
+  if (!trimmed) {
+    delete formState.values[field];
+    updateTodoFormButtonState(action);
+    return;
+  }
+  const parsed = parseDateInput(trimmed, new Date());
+  formState.values[field] = parsed.iso || trimmed;
+  updateTodoFormButtonState(action);
+}
+
+// WHAT: render a deadline input with relative date suggestions.
+// WHY: reviewers expect the same “today/tomorrow” helper from the pending editor.
+// HOW: build an input + datalist pair and wire it to `handleTodoDeadlineInput`.
+function buildTodoDeadlineInput(action, field, value, required, wrapper) {
+  const container = document.createElement('div');
+  container.className = 'search-input';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = '';
+  input.value = value || '';
+  const listId = `todo-${action}-${field}-options`;
+  input.setAttribute('list', listId);
+  const dataList = document.createElement('datalist');
+  dataList.id = listId;
+  buildRelativeDateOptions(new Date()).forEach((opt) => {
+    const option = document.createElement('option');
+    option.value = `${opt.label} (${opt.display})`;
+    dataList.appendChild(option);
+  });
+  input.addEventListener('input', (event) => {
+    handleTodoDeadlineInput(action, field, event.target.value);
+    if (required) {
+      const hasValue = fieldHasValue(getTodoFormState(action).values[field]);
+      wrapper.classList.toggle('field-required', !hasValue);
+    }
+  });
+  container.appendChild(input);
+  container.appendChild(dataList);
+  return container;
+}
+
+// WHAT: hydrate the update form fields when an existing todo id is selected.
+// WHY: mimics the entity dropdown in the pending editor so reviewers don't retype payloads.
+// HOW: find the matching store entry, run the todo hydrate helper, merge into state, then rerender.
+function hydrateTodoFormFromId(entityId) {
+  if (!entityId) return;
+  const config = ENTITY_FIELD_CONFIG.todo_list;
+  if (!config) return;
+  const entries = state.dataStores[config.store] || [];
+  const match = entries.find((entry) => String(entry[config.field] || entry.id) === String(entityId));
+  if (!match) return;
+  const hydrated = config.hydrate(match);
+  const formState = getTodoFormState('update');
+  Object.entries(hydrated).forEach(([key, value]) => {
+    if (key === 'deadline') {
+      formState.display[key] = value ? formatDanishDateString(value) : '';
+    }
+    if (value === null || value === undefined || value === '') {
+      delete formState.values[key];
+    } else {
+      formState.values[key] = value;
+    }
+  });
+}
+
+// WHAT: enter update mode when a todo row is selected.
+// WHY: reviewers click table rows to edit existing entries without juggling multiple forms.
+// HOW: hydrate the update form with the row’s payload, switch the active action, and scroll the form into view.
+function selectTodoForUpdate(todo, options = {}) {
+  if (!todo || !todo.id) return;
+  hydrateTodoFormFromId(todo.id);
+  setSelectedDataRow('todos', todo.id);
+  setTodoCrudAction('update');
+  if (options.scroll !== false && el.todoCrudForm) {
+    el.todoCrudForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  renderTodos();
+}
+
+// WHAT: build the todo id `<select>` element for update forms.
+// WHY: lets reviewers pick an existing entry and auto-fill the rest of the fields.
+// HOW: populate options from the cached store, sync selection state, and hook up hydration on change.
+function buildTodoIdSelect(action, currentValue, required, wrapper) {
+  const select = document.createElement('select');
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose todo';
+  select.appendChild(placeholder);
+  const entries = state.dataStores.todos || [];
+  entries.forEach((todo) => {
+    const option = document.createElement('option');
+    option.value = String(todo.id);
+    option.textContent = `${todo.title || 'Untitled'} (#${todo.id})`;
+    select.appendChild(option);
+  });
+  select.value = currentValue ? String(currentValue) : '';
+  select.addEventListener('change', (event) => {
+    const value = event.target.value;
+    setTodoFormValue(action, 'id', value);
+    if (required) {
+      const hasValue = fieldHasValue(getTodoFormState(action).values.id);
+      wrapper.classList.toggle('field-required', !hasValue);
+    }
+    if (value) {
+      hydrateTodoFormFromId(value);
+      renderTodoCrudForm();
+      setSelectedDataRow('todos', value);
+      renderTodos();
+    } else {
+      clearSelectedDataRow('todos');
+      renderTodos();
+    }
+  });
+  return select;
+}
+
+// WHAT: render the todo create/update forms using the shared field layout.
+// WHY: Data Stores now mirror the pending editor experience, so we need dynamic grids per action.
+// HOW: iterate the configured fields, attach the right controls (text/select/datetime), and honor required styling/layout metadata.
+function renderTodoActionForm(action) {
+  const grid = el.todoCrudGrid;
+  if (!grid) return;
+  const config = TOOL_ACTION_FIELD_CONFIG.todo_list?.[action];
+  const fields = config?.fields || [];
+  grid.innerHTML = '';
+  if (!fields.length) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'No fields configured for this action.';
+    grid.appendChild(hint);
+    return;
+  }
+  const formState = getTodoFormState(action);
+  fields.forEach((field) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'field-wrapper';
+    wrapper.dataset.field = field;
+    const label = document.createElement('span');
+    label.textContent = getFieldLabel('todo_list', field);
+    wrapper.appendChild(label);
+    const required = isFieldRequired('todo_list', action, field);
+    const rawValue = formState.values[field];
+    const displayValue = field === 'deadline' ? formState.display?.[field] || rawValue || '' : rawValue || '';
+    if (required && !fieldHasValue(rawValue)) {
+      wrapper.classList.add('field-required');
+    }
+    let control;
+    if (field === 'id') {
+      control = buildTodoIdSelect(action, rawValue, required, wrapper);
+    } else if (field === 'deadline') {
+      control = buildTodoDeadlineInput(action, field, displayValue, required, wrapper);
+    } else {
+      const fieldConfig = FIELD_LIBRARY[field] || {};
+      control =
+        fieldConfig.control?.() ||
+        (fieldConfig.type === 'textarea' ? document.createElement('textarea') : document.createElement('input'));
+      control.value = displayValue || '';
+      if (!fieldConfig.control && fieldConfig.type !== 'textarea') {
+        control.type = 'text';
+      }
+      const eventName = control.tagName === 'SELECT' ? 'change' : 'input';
+      control.addEventListener(eventName, (event) => {
+        const value = event.target.value;
+        setTodoFormValue(action, field, value, { preserveSpacing: field === 'content' });
+        if (required) {
+          const hasValue = fieldHasValue(getTodoFormState(action).values[field]);
+          wrapper.classList.toggle('field-required', !hasValue);
+        }
+      });
+    }
+    wrapper.appendChild(control);
+    applyFieldLayout(wrapper, 'todo_list', action, field);
+    grid.appendChild(wrapper);
+  });
+  updateTodoFormButtonState(action);
+}
+
+// WHAT: render the single Todo CRUD form using whichever action is active.
+// WHY: the dashboard now uses one form that flips between create/update when rows are selected.
+// HOW: render the configured fields, update header text/button styles, and show/hide the reset button.
+function renderTodoCrudForm() {
+  const action = getActiveTodoAction();
+  renderTodoActionForm(action);
+  if (el.todoCrudTitle) {
+    el.todoCrudTitle.textContent = action === 'create' ? 'Create Todo' : 'Update Todo';
+  }
+  if (el.todoCrudSubmit) {
+    el.todoCrudSubmit.textContent = action === 'create' ? 'Create Todo' : 'Update Todo';
+    el.todoCrudSubmit.classList.toggle('primary', action === 'create');
+    el.todoCrudSubmit.classList.toggle('secondary', action !== 'create');
+  }
+  if (el.todoCrudReset) {
+    el.todoCrudReset.classList.toggle('hidden', action === 'create');
+  }
+  updateTodoFormButtonState(action);
+}
+
+// WHAT: serialize the todo CRUD state into a mutate payload.
+// WHY: the Data Stores endpoint expects action + tool fields, same as pending corrections.
+// HOW: copy non-empty values from the per-action state into a new object.
+function buildTodoPayload(action) {
+  const formState = getTodoFormState(action);
+  const payload = { action };
+  Object.entries(formState.values).forEach(([key, value]) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      payload[key] = key === 'content' ? value : trimmed;
+    } else {
+      payload[key] = value;
+    }
+  });
+  return payload;
+}
+
+// WHAT: submit the Data Stores todo form for the given action.
+// WHY: create/update buttons should reuse the same mutate endpoint as pending corrections.
+// HOW: build the payload, run `mutateStore`, and reset the create form on success.
+async function handleTodoFormSubmit(action) {
+  const targetAction = action || getActiveTodoAction();
+  const payload = buildTodoPayload(targetAction);
+  if (!payload) return;
+  const success = await mutateStore('todos', payload);
+  if (success && targetAction === 'create') {
+    resetTodoForm('create');
+    setTodoCrudAction('create');
+  } else if (success && targetAction === 'update' && payload.id) {
+    hydrateTodoFormFromId(payload.id);
+    renderTodoCrudForm();
+  } else if (!success && targetAction === 'create') {
+    renderTodoCrudForm();
+  }
+}
+
+// WHAT: derive comparable text values for todo sorting.
+// WHY: Title/status sorts should be case-insensitive and stable.
+// HOW: normalize to lowercase strings for the requested column.
+function getTodoTextValue(todo, column) {
+  if (column === 'status') {
+    return (todo.status || '').toLowerCase();
+  }
+  return (todo.title || '').toLowerCase();
+}
+
+// WHAT: convert deadline strings into sortable timestamps.
+// WHY: deadlines may be natural language, so we translate them into actual dates for ordering.
+// HOW: reuse the date parser to get ISO strings and then feed them to `Date.parse`.
+function getTodoDeadlineTimestamp(value) {
+  if (!value) return null;
+  const parsed = parseDateInput(value, new Date());
+  const iso = parsed.iso || value;
+  const ts = Date.parse(iso);
+  return Number.isNaN(ts) ? null : ts;
+}
+
+function getCalendarTimestamp(value) {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isNaN(ts) ? null : ts;
+}
+
+// WHAT: sort todos according to the active header selection.
+// WHY: reviewers need to pivot between title/status/soonest-deadline views without leaving the page.
+// HOW: clone the list, compare values per column (with deadline-specific handling), and fall back to title to break ties.
+function sortTodosByState(list) {
+  const { column, direction } = state.todoSort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...(list || [])].sort((a, b) => {
+    if (column === 'deadline') {
+      const aTs = getTodoDeadlineTimestamp(a.deadline);
+      const bTs = getTodoDeadlineTimestamp(b.deadline);
+      const fallback = direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+      const aValue = aTs === null ? fallback : aTs;
+      const bValue = bTs === null ? fallback : bTs;
+      if (aValue !== bValue) {
+        return aValue > bValue ? multiplier : -multiplier;
+      }
+    } else {
+      const aValue = getTodoTextValue(a, column);
+      const bValue = getTodoTextValue(b, column);
+      if (aValue !== bValue) {
+        return aValue > bValue ? multiplier : -multiplier;
+      }
+    }
+    return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+  });
+}
+
+function sortCalendarEvents(list) {
+  const { column, direction } = state.calendarSort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...(list || [])].sort((a, b) => {
+    if (column === 'end') {
+      const aTs = getCalendarTimestamp(a.end);
+      const bTs = getCalendarTimestamp(b.end);
+      const fallback = direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+      const aValue = aTs === null ? fallback : aTs;
+      const bValue = bTs === null ? fallback : bTs;
+      if (aValue !== bValue) {
+        return aValue > bValue ? multiplier : -multiplier;
+      }
+    } else if (column === 'title') {
+      const aValue = (a.title || '').toLowerCase();
+      const bValue = (b.title || '').toLowerCase();
+      if (aValue !== bValue) {
+        return aValue > bValue ? multiplier : -multiplier;
+      }
+    } else if (column === 'content') {
+      const aValue = (a.content || '').toLowerCase();
+      const bValue = (b.content || '').toLowerCase();
+      if (aValue !== bValue) {
+        return aValue > bValue ? multiplier : -multiplier;
+      }
+    }
+    return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+  });
+}
+
+// WHAT: toggle the active todo sort column/direction.
+// WHY: clicking column headers should flip between ascending/descending ordering.
+// HOW: update the `state.todoSort` metadata and rerender the table.
+function setTodoSort(column) {
+  if (!column) return;
+  if (state.todoSort.column === column) {
+    state.todoSort.direction = state.todoSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.todoSort.column = column;
+    state.todoSort.direction = column === 'deadline' ? 'asc' : 'asc';
+  }
+  renderTodos();
+}
+
+function setCalendarSort(column) {
+  if (!column) return;
+  if (state.calendarSort.column === column) {
+    state.calendarSort.direction = state.calendarSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.calendarSort.column = column;
+    state.calendarSort.direction = column === 'end' ? 'desc' : 'asc';
+  }
+  renderCalendar();
+}
+
+// WHAT: reflect the current sort state in the header buttons.
+// WHY: reviewers need visual cues for which column/direction is active.
+// HOW: walk the todos header buttons and set/remove a `data-sort-state` attribute.
+function renderTodoSortIndicators() {
+  if (!el.todoSortButtons) return;
+  el.todoSortButtons.forEach((button) => {
+    if (button.dataset.todoSort === state.todoSort.column) {
+      button.dataset.sortState = state.todoSort.direction;
+    } else {
+      button.removeAttribute('data-sort-state');
+    }
+  });
+}
+
+function renderCalendarSortIndicators() {
+  if (!el.calendarSortButtons) return;
+  el.calendarSortButtons.forEach((button) => {
+    if (button.dataset.calendarSort === state.calendarSort.column) {
+      button.dataset.sortState = state.calendarSort.direction;
+    } else {
+      button.removeAttribute('data-sort-state');
+    }
+  });
+}
+
 // WHAT: populate the Todos data panel with current store entries.
 // WHY: reviewers need quick visibility into persisted todos for context and manual QA.
 // HOW: sort cached store items, build list rows with key metadata, and inject into the DOM.
 function renderTodos() {
   if (!el.todosPanel) return;
   el.todosPanel.innerHTML = '';
-  const rows = sortNewestFirst(state.dataStores.todos, 'deadline');
+  const rows = sortTodosByState(state.dataStores.todos);
+  const selectedTodoId = getSelectedDataRow('todos');
+  const highlightActive = getActiveTodoAction() === 'update' && selectedTodoId;
   rows.forEach((todo) => {
     const tr = document.createElement('tr');
+    if (todo.id) {
+      tr.dataset.todoId = todo.id;
+    }
+    if (highlightActive && String(selectedTodoId) === String(todo.id)) {
+      tr.classList.add('selected-row');
+    }
     const title = document.createElement('td');
+    title.className = 'col-title';
     title.textContent = todo.title || 'Untitled';
     const status = document.createElement('td');
+    status.className = 'col-status';
     status.textContent = todo.status || 'pending';
     const deadline = document.createElement('td');
-    deadline.textContent = todo.deadline || '—';
+    deadline.className = 'col-deadline';
+    const deadlineText = todo.deadline ? formatDanishDateString(todo.deadline) : '—';
+    deadline.textContent = deadlineText;
+    const actions = document.createElement('td');
+    actions.className = 'col-actions';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'button ghost';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.disabled = !todo.id;
+    deleteBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (!todo.id) return;
+      deleteBtn.disabled = true;
+      try {
+        await mutateStore('todos', {
+          action: 'delete',
+          id: todo.id,
+          title: todo.title,
+        });
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
     tr.appendChild(title);
     tr.appendChild(status);
     tr.appendChild(deadline);
+    tr.appendChild(actions);
+    tr.addEventListener('click', () => {
+      selectTodoForUpdate(todo);
+    });
     el.todosPanel.appendChild(tr);
   });
+  renderTodoSortIndicators();
+}
+
+function applyTodoSelectionFromState() {
+  const selectedId = getSelectedDataRow('todos');
+  if (!selectedId) {
+    if (getActiveTodoAction() === 'update') {
+      setTodoCrudAction('create');
+    }
+    return;
+  }
+  const match = (state.dataStores.todos || []).find(
+    (todo) => String(todo.id) === String(selectedId),
+  );
+  if (!match) {
+    clearSelectedDataRow('todos');
+    if (getActiveTodoAction() === 'update') {
+      setTodoCrudAction('create');
+    }
+    return;
+  }
+  hydrateTodoFormFromId(match.id);
+  setTodoCrudAction('update');
+  renderTodos();
+}
+
+function getKitchenTextValue(tip, column) {
+  if (column === 'keywords') {
+    if (Array.isArray(tip.keywords)) {
+      return tip.keywords.join(', ').toLowerCase();
+    }
+    if (typeof tip.keywords === 'string') {
+      return tip.keywords.toLowerCase();
+    }
+    return '';
+  }
+  if (column === 'content') {
+    return (tip.content || '').toLowerCase();
+  }
+  if (column === 'link') {
+    return tip.link ? tip.link.toLowerCase() : '';
+  }
+  return (tip.title || '').toLowerCase();
+}
+
+function sortKitchenTips(list) {
+  const { column, direction } = state.kitchenSort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...(list || [])].sort((a, b) => {
+    const aValue = getKitchenTextValue(a, column);
+    const bValue = getKitchenTextValue(b, column);
+    if (aValue !== bValue) {
+      return aValue > bValue ? multiplier : -multiplier;
+    }
+    return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+  });
+}
+
+function setKitchenSort(column) {
+  if (!column) return;
+  if (state.kitchenSort.column === column) {
+    state.kitchenSort.direction = state.kitchenSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.kitchenSort.column = column;
+    state.kitchenSort.direction = column === 'title' ? 'asc' : 'asc';
+  }
+  renderKitchen();
+}
+
+function renderKitchenSortIndicators() {
+  if (!el.kitchenSortButtons) return;
+  el.kitchenSortButtons.forEach((button) => {
+    if (button.dataset.kitchenSort === state.kitchenSort.column) {
+      button.dataset.sortState = state.kitchenSort.direction;
+    } else {
+      button.removeAttribute('data-sort-state');
+    }
+  });
+}
+
+function getKitchenFormState(action) {
+  if (!state.kitchenCrud[action]) {
+    state.kitchenCrud[action] = createKitchenFormState(action);
+  }
+  return state.kitchenCrud[action];
+}
+
+function resetKitchenForm(action) {
+  state.kitchenCrud[action] = createKitchenFormState(action);
+}
+
+function getActiveKitchenAction() {
+  return state.kitchenCrud.activeAction === 'update' ? 'update' : 'create';
+}
+
+function setKitchenCrudAction(action) {
+  const normalized = action === 'update' ? 'update' : 'create';
+  state.kitchenCrud.activeAction = normalized;
+  if (normalized !== 'update') {
+    clearSelectedDataRow('kitchen_tips');
+    renderKitchen();
+  }
+  renderKitchenCrudForm();
+}
+
+function updateKitchenFormButtonState(action) {
+  const button = el.kitchenCrudSubmit;
+  if (!button) return;
+  const targetAction = action || getActiveKitchenAction();
+  const formState = getKitchenFormState(targetAction);
+  const requiredFields = TOOL_ACTION_FIELD_CONFIG.kitchen_tips?.[targetAction]?.required || [];
+  const isValid = requiredFields.every((field) => fieldHasValue(formState.values[field]));
+  button.disabled = !isValid;
+}
+
+function setKitchenFormValue(action, field, value, options = {}) {
+  if (!field) return;
+  const formState = getKitchenFormState(action);
+  let next = value;
+  if (typeof next === 'string' && !options.preserveSpacing) {
+    next = next.trim();
+  }
+  if (next === '' || next === null || next === undefined) {
+    if (field === 'keywords' && next === '') {
+      formState.values[field] = '';
+    } else {
+      delete formState.values[field];
+    }
+  } else {
+    formState.values[field] = next;
+  }
+  updateKitchenFormButtonState(action);
+}
+
+function buildKitchenIdSelect(action, currentValue, required, wrapper) {
+  const select = document.createElement('select');
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose tip';
+  select.appendChild(placeholder);
+  const entries = state.dataStores.kitchen_tips || [];
+  entries.forEach((tip) => {
+    const option = document.createElement('option');
+    option.value = String(tip.id);
+    option.textContent = `${tip.title || 'Untitled'} (#${tip.id})`;
+    select.appendChild(option);
+  });
+  select.value = currentValue ? String(currentValue) : '';
+  select.addEventListener('change', (event) => {
+    const value = event.target.value;
+    setKitchenFormValue(action, 'id', value);
+    if (required) {
+      const hasValue = fieldHasValue(getKitchenFormState(action).values.id);
+      wrapper.classList.toggle('field-required', !hasValue);
+    }
+    if (value) {
+      hydrateKitchenFormFromId(value);
+      renderKitchenCrudForm();
+      setSelectedDataRow('kitchen_tips', value);
+      renderKitchen();
+    } else {
+      clearSelectedDataRow('kitchen_tips');
+      renderKitchen();
+    }
+  });
+  return select;
+}
+
+function renderKitchenActionForm(action) {
+  const grid = el.kitchenCrudGrid;
+  if (!grid) return;
+  const config = TOOL_ACTION_FIELD_CONFIG.kitchen_tips?.[action];
+  const fields = config?.fields || [];
+  grid.innerHTML = '';
+  if (!fields.length) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'No fields configured for this action.';
+    grid.appendChild(hint);
+    return;
+  }
+  const formState = getKitchenFormState(action);
+  fields.forEach((field) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'field-wrapper';
+    wrapper.dataset.field = field;
+    const label = document.createElement('span');
+    label.textContent = getFieldLabel('kitchen_tips', field);
+    wrapper.appendChild(label);
+    const required = isFieldRequired('kitchen_tips', action, field);
+    const rawValue = formState.values[field];
+    if (required && !fieldHasValue(rawValue)) {
+      wrapper.classList.add('field-required');
+    }
+    let control;
+    if (field === 'id') {
+      control = buildKitchenIdSelect(action, rawValue, required, wrapper);
+    } else {
+      const fieldConfig = FIELD_LIBRARY[field] || {};
+      control =
+        fieldConfig.control?.() ||
+        (field === 'content' ? document.createElement('textarea') : document.createElement('input'));
+      if (control.tagName === 'INPUT') {
+        control.type = 'text';
+      }
+      control.value = rawValue || '';
+      control.addEventListener('input', (event) => {
+        setKitchenFormValue(action, field, event.target.value, { preserveSpacing: field === 'content' });
+        if (required) {
+          const hasValue = fieldHasValue(getKitchenFormState(action).values[field]);
+          wrapper.classList.toggle('field-required', !hasValue);
+        }
+      });
+    }
+    wrapper.appendChild(control);
+    applyFieldLayout(wrapper, 'kitchen_tips', action, field);
+    grid.appendChild(wrapper);
+  });
+  updateKitchenFormButtonState(action);
+}
+
+function renderKitchenCrudForm() {
+  const action = getActiveKitchenAction();
+  renderKitchenActionForm(action);
+  if (el.kitchenCrudTitle) {
+    el.kitchenCrudTitle.textContent = action === 'create' ? 'Create Tip' : 'Update Tip';
+  }
+  if (el.kitchenCrudSubmit) {
+    el.kitchenCrudSubmit.textContent = action === 'create' ? 'Create Tip' : 'Update Tip';
+    el.kitchenCrudSubmit.classList.toggle('primary', action === 'create');
+    el.kitchenCrudSubmit.classList.toggle('secondary', action !== 'create');
+  }
+  if (el.kitchenCrudReset) {
+    el.kitchenCrudReset.classList.toggle('hidden', action === 'create');
+  }
+  updateKitchenFormButtonState(action);
+}
+
+function buildKitchenPayload(action) {
+  const formState = getKitchenFormState(action);
+  const payload = { action };
+  Object.entries(formState.values).forEach(([key, value]) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+    if (typeof value === 'string') {
+      if (key === 'keywords') {
+        const keywords = value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        payload[key] = keywords;
+        return;
+      }
+      const text = key === 'content' ? value : value.trim();
+      if (!text) {
+        return;
+      }
+      payload[key] = key === 'content' ? value : text;
+    } else {
+      payload[key] = value;
+    }
+  });
+  return payload;
+}
+
+async function handleKitchenFormSubmit(action) {
+  const targetAction = action || getActiveKitchenAction();
+  const payload = buildKitchenPayload(targetAction);
+  if (!payload) return;
+  const success = await mutateStore('kitchen_tips', payload);
+  if (success && targetAction === 'create') {
+    resetKitchenForm('create');
+    setKitchenCrudAction('create');
+  } else if (success && targetAction === 'update' && payload.id) {
+    hydrateKitchenFormFromId(payload.id);
+    renderKitchenCrudForm();
+  } else if (!success && targetAction === 'create') {
+    renderKitchenCrudForm();
+  }
+}
+
+function hydrateKitchenFormFromId(entityId) {
+  if (!entityId) return;
+  const config = ENTITY_FIELD_CONFIG.kitchen_tips;
+  if (!config) return;
+  const entries = state.dataStores[config.store] || [];
+  const match = entries.find((entry) => String(entry[config.field] || entry.id) === String(entityId));
+  if (!match) return;
+  const hydrated = config.hydrate(match);
+  const formState = getKitchenFormState('update');
+  Object.entries(hydrated).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') {
+      delete formState.values[key];
+    } else {
+      formState.values[key] = value;
+    }
+  });
+  formState.values.id = match.id;
+}
+
+function selectKitchenForUpdate(tip) {
+  if (!tip || !tip.id) return;
+  hydrateKitchenFormFromId(tip.id);
+  setSelectedDataRow('kitchen_tips', tip.id);
+  setKitchenCrudAction('update');
+  if (el.kitchenCrudForm) {
+    el.kitchenCrudForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  renderKitchen();
+}
+
+function applyKitchenSelectionFromState() {
+  const selectedId = getSelectedDataRow('kitchen_tips');
+  if (!selectedId) {
+    if (getActiveKitchenAction() === 'update') {
+      setKitchenCrudAction('create');
+    }
+    return;
+  }
+  const match = (state.dataStores.kitchen_tips || []).find(
+    (tip) => String(tip.id) === String(selectedId),
+  );
+  if (!match) {
+    clearSelectedDataRow('kitchen_tips');
+    if (getActiveKitchenAction() === 'update') {
+      setKitchenCrudAction('create');
+    }
+    return;
+  }
+  hydrateKitchenFormFromId(match.id);
+  setKitchenCrudAction('update');
+  renderKitchen();
+}
+
+function hydrateCalendarFormFromId(entityId) {
+  if (!entityId) return;
+  const config = ENTITY_FIELD_CONFIG.calendar_edit;
+  if (!config) return;
+  const entries = state.dataStores[config.store] || [];
+  const match = entries.find((entry) => String(entry[config.field] || entry.id) === String(entityId));
+  if (!match) return;
+  const formState = getCalendarFormState('update');
+  const fields = ['id', 'title', 'start', 'end', 'location', 'content', 'link'];
+  fields.forEach((field) => {
+    const value = match[field];
+    if (field === 'start' || field === 'end') {
+      formState.display[field] = value ? formatDanishDateString(value) : '';
+      if (value) {
+        formState.values[field] = value;
+        setCalendarDatetimeParts(formState, field, value);
+      } else {
+        delete formState.values[field];
+        if (formState.datetime) {
+          delete formState.datetime[field];
+        }
+      }
+    } else if (value === null || value === undefined || value === '') {
+      delete formState.values[field];
+    } else {
+      formState.values[field] = field === 'content' ? value : String(value);
+    }
+  });
+  formState.values.id = match.id;
+}
+
+function selectCalendarForUpdate(event, options = {}) {
+  if (!event || !event.id) return;
+  hydrateCalendarFormFromId(event.id);
+  setSelectedDataRow('calendar', event.id);
+  setCalendarCrudAction('update');
+  if (options.scroll !== false && el.calendarCrudForm) {
+    el.calendarCrudForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  renderCalendar();
+}
+
+function getCalendarFormState(action) {
+  if (!state.calendarCrud[action]) {
+    state.calendarCrud[action] = createCalendarFormState(action);
+  }
+  if (!state.calendarCrud[action].display) {
+    state.calendarCrud[action].display = {};
+  }
+  return state.calendarCrud[action];
+}
+
+function resetCalendarForm(action) {
+  state.calendarCrud[action] = createCalendarFormState(action);
+}
+
+function getActiveCalendarAction() {
+  return state.calendarCrud.activeAction === 'update' ? 'update' : 'create';
+}
+
+function setCalendarCrudAction(action) {
+  const normalized = action === 'update' ? 'update' : 'create';
+  state.calendarCrud.activeAction = normalized;
+  if (normalized !== 'update') {
+    clearSelectedDataRow('calendar');
+    renderCalendar();
+  }
+  renderCalendarCrudForm();
+}
+
+function updateCalendarFormButtonState(action) {
+  const button = el.calendarCrudSubmit;
+  if (!button) return;
+  const targetAction = action || getActiveCalendarAction();
+  const formState = getCalendarFormState(targetAction);
+  const requiredFields = TOOL_ACTION_FIELD_CONFIG.calendar_edit?.[targetAction]?.required || [];
+  const isValid = requiredFields.every((field) => fieldHasValue(formState.values[field]));
+  button.disabled = !isValid;
+}
+
+function setCalendarFormValue(action, field, value, options = {}) {
+  if (!field) return;
+  const formState = getCalendarFormState(action);
+  let next = value;
+  if (typeof next === 'string' && !options.preserveSpacing) {
+    next = next.trim();
+  }
+  if (next === '' || next === null || next === undefined) {
+    delete formState.values[field];
+    if ((field === 'start' || field === 'end') && formState.datetime) {
+      delete formState.datetime[field];
+    }
+  } else {
+    formState.values[field] = next;
+    if ((field === 'start' || field === 'end') && formState.datetime) {
+      setCalendarDatetimeParts(formState, field, String(next));
+    }
+  }
+  updateCalendarFormButtonState(action);
+}
+
+function splitCalendarDatetimeValue(value) {
+  if (!value || typeof value !== 'string') {
+    return { date: '', time: '' };
+  }
+  if (value.includes('T')) {
+    const [datePart, timePart] = value.split('T');
+    return {
+      date: datePart || '',
+      time: (timePart || '').slice(0, 5),
+    };
+  }
+  const parts = value.trim().split(/\s+/);
+  return {
+    date: parts[0] || '',
+    time: parts.slice(1).join(' ') || '',
+  };
+}
+
+function ensureCalendarDatetimeParts(action, field) {
+  const formState = getCalendarFormState(action);
+  if (!formState.datetime) {
+    formState.datetime = {};
+  }
+  if (!formState.datetime[field]) {
+    const existingValue = formState.values[field];
+    formState.datetime[field] = splitCalendarDatetimeValue(typeof existingValue === 'string' ? existingValue : '');
+  }
+  return formState.datetime[field];
+}
+
+function setCalendarDatetimeParts(formState, field, value) {
+  if (!formState.datetime) {
+    formState.datetime = {};
+  }
+  if (!value) {
+    delete formState.datetime[field];
+    return;
+  }
+  formState.datetime[field] = splitCalendarDatetimeValue(value);
+}
+
+function updateCalendarDatetimeValue(action, field) {
+  const formState = getCalendarFormState(action);
+  const parts = ensureCalendarDatetimeParts(action, field);
+  const dateText = (parts.date || '').trim();
+  const timeText = (parts.time || '').trim();
+  if (!dateText) {
+    delete formState.values[field];
+    if (formState.display) {
+      delete formState.display[field];
+    }
+    return;
+  }
+  const config = DATE_TIME_FIELD_CONFIG[field] || { includeTime: true, defaultTime: '09:00' };
+  const dateInfo = parseDateInput(dateText, new Date());
+  if (!dateInfo.iso) {
+    const fallback = [dateText, timeText].filter(Boolean).join(' ').trim();
+    if (fallback) {
+      formState.values[field] = fallback;
+      if (formState.display) {
+        formState.display[field] = fallback;
+      }
+    } else {
+      delete formState.values[field];
+      if (formState.display) {
+        delete formState.display[field];
+      }
+    }
+    return;
+  }
+  if (!config.includeTime) {
+    formState.values[field] = dateInfo.iso;
+    if (formState.display) {
+      formState.display[field] = formatDanishDateString(dateInfo.iso);
+    }
+    return;
+  }
+  const timeInfo = parseTimeInput(timeText || config.defaultTime || '');
+  const timeValue = timeInfo.time || config.defaultTime || timeText || '';
+  if (!timeValue) {
+    formState.values[field] = dateInfo.iso;
+    if (formState.display) {
+      formState.display[field] = formatDanishDateString(dateInfo.iso);
+    }
+    return;
+  }
+  const isoValue = `${dateInfo.iso}T${timeValue}`;
+  formState.values[field] = isoValue;
+  if (formState.display) {
+    formState.display[field] = formatDanishDateString(isoValue);
+  }
+}
+
+function buildCalendarDateTimeFields(action, field, required) {
+  const formState = getCalendarFormState(action);
+  const parts = ensureCalendarDatetimeParts(action, field);
+  const wrappers = [];
+  const trackedWrappers = [];
+  const updateRequired = () => {
+    if (!required) return;
+    const hasValue = fieldHasValue(formState.values[field]);
+    trackedWrappers.forEach((wrapper) => {
+      wrapper.classList.toggle('field-required', !hasValue);
+    });
+  };
+
+  const dateWrapper = document.createElement('div');
+  dateWrapper.className = 'field-wrapper datetime-field';
+  dateWrapper.dataset.field = `${field}-date`;
+  const dateLabel = document.createElement('span');
+  const baseLabel = getFieldLabel('calendar_edit', field);
+  dateLabel.textContent = `${baseLabel} Date`;
+  dateWrapper.appendChild(dateLabel);
+  const dateInput = document.createElement('input');
+  dateInput.type = 'text';
+  dateInput.value = parts.date || '';
+  const dateListId = `calendar-${action}-${field}-date-options`;
+  dateInput.setAttribute('list', dateListId);
+  const dateDatalist = document.createElement('datalist');
+  dateDatalist.id = dateListId;
+  buildRelativeDateOptions(new Date()).forEach((opt) => {
+    const option = document.createElement('option');
+    option.value = `${opt.label} (${opt.display})`;
+    dateDatalist.appendChild(option);
+  });
+  dateInput.addEventListener('input', (event) => {
+    ensureCalendarDatetimeParts(action, field).date = event.target.value;
+    updateCalendarDatetimeValue(action, field);
+    updateRequired();
+    updateCalendarFormButtonState(action);
+  });
+  dateWrapper.appendChild(dateInput);
+  dateWrapper.appendChild(dateDatalist);
+  applyFieldLayout(dateWrapper, 'calendar_edit', action, `${field}-date`);
+  wrappers.push(dateWrapper);
+  if (required) {
+    trackedWrappers.push(dateWrapper);
+  }
+
+  const config = DATE_TIME_FIELD_CONFIG[field] || { includeTime: true };
+  if (config.includeTime !== false) {
+    const timeWrapper = document.createElement('div');
+    timeWrapper.className = 'field-wrapper datetime-field';
+    timeWrapper.dataset.field = `${field}-time`;
+    const timeLabel = document.createElement('span');
+      timeLabel.textContent = `${baseLabel} Time`;
+    timeWrapper.appendChild(timeLabel);
+    const timeInput = document.createElement('input');
+    timeInput.type = 'text';
+    timeInput.value = parts.time || '';
+    const timeListId = `calendar-${action}-${field}-time-options`;
+    timeInput.setAttribute('list', timeListId);
+    const timeDatalist = document.createElement('datalist');
+    timeDatalist.id = timeListId;
+    buildRelativeTimeOptions(new Date()).forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = `${opt.label} (${opt.time})`;
+      timeDatalist.appendChild(option);
+    });
+    timeInput.addEventListener('input', (event) => {
+      ensureCalendarDatetimeParts(action, field).time = event.target.value;
+      updateCalendarDatetimeValue(action, field);
+      updateRequired();
+      updateCalendarFormButtonState(action);
+    });
+    timeWrapper.appendChild(timeInput);
+    timeWrapper.appendChild(timeDatalist);
+    applyFieldLayout(timeWrapper, 'calendar_edit', action, `${field}-time`);
+    wrappers.push(timeWrapper);
+  }
+
+  updateCalendarDatetimeValue(action, field);
+  updateRequired();
+  return wrappers;
+}
+
+function buildCalendarIdSelect(action, currentValue, required, wrapper) {
+  const select = document.createElement('select');
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose event';
+  select.appendChild(placeholder);
+  const entries = state.dataStores.calendar || [];
+  entries.forEach((event) => {
+    const option = document.createElement('option');
+    option.value = String(event.id);
+    option.textContent = `${event.title || 'Untitled'} (#${event.id})`;
+    select.appendChild(option);
+  });
+  select.value = currentValue ? String(currentValue) : '';
+  select.addEventListener('change', (event) => {
+    const value = event.target.value;
+    setCalendarFormValue(action, 'id', value);
+    if (required) {
+      const hasValue = fieldHasValue(getCalendarFormState(action).values.id);
+      wrapper.classList.toggle('field-required', !hasValue);
+    }
+    if (value) {
+      hydrateCalendarFormFromId(value);
+      renderCalendarCrudForm();
+      setSelectedDataRow('calendar', value);
+      renderCalendar();
+    } else {
+      clearSelectedDataRow('calendar');
+      renderCalendar();
+    }
+  });
+  return select;
+}
+
+function renderCalendarActionForm(action) {
+  const grid = el.calendarCrudGrid;
+  if (!grid) return;
+  const config = TOOL_ACTION_FIELD_CONFIG.calendar_edit?.[action];
+  const fields = config?.fields || [];
+  grid.innerHTML = '';
+  const timelineEnabled = !['delete', 'find', 'list'].includes(action);
+  grid.classList.toggle('calendar-layout', timelineEnabled);
+  if (!fields.length) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'No fields configured for this action.';
+    grid.appendChild(hint);
+    return;
+  }
+  const formState = getCalendarFormState(action);
+  fields.forEach((field) => {
+    const required = isFieldRequired('calendar_edit', action, field);
+    const rawValue = formState.values[field];
+    if (field === 'start' || field === 'end') {
+      const dateWrappers = buildCalendarDateTimeFields(action, field, required);
+      dateWrappers.forEach((wrapper) => {
+        grid.appendChild(wrapper);
+      });
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'field-wrapper';
+    wrapper.dataset.field = field;
+    const label = document.createElement('span');
+    label.textContent = getFieldLabel('calendar_edit', field);
+    wrapper.appendChild(label);
+    if (required && !fieldHasValue(rawValue)) {
+      wrapper.classList.add('field-required');
+    }
+    let control;
+    if (field === 'id') {
+      control = buildCalendarIdSelect(action, rawValue, required, wrapper);
+    } else {
+      const fieldConfig = FIELD_LIBRARY[field] || {};
+      control =
+        fieldConfig.control?.() ||
+        (field === 'content' ? document.createElement('textarea') : document.createElement('input'));
+      if (control.tagName === 'INPUT') {
+        control.type = 'text';
+      }
+      control.value = rawValue || '';
+      control.addEventListener('input', (event) => {
+        setCalendarFormValue(action, field, event.target.value, { preserveSpacing: field === 'content' });
+        if (required) {
+          const hasValue = fieldHasValue(getCalendarFormState(action).values[field]);
+          wrapper.classList.toggle('field-required', !hasValue);
+        }
+      });
+    }
+    wrapper.appendChild(control);
+    applyFieldLayout(wrapper, 'calendar_edit', action, field);
+    grid.appendChild(wrapper);
+  });
+  updateCalendarFormButtonState(action);
+}
+
+function renderCalendarCrudForm() {
+  const action = getActiveCalendarAction();
+  renderCalendarActionForm(action);
+  if (el.calendarCrudTitle) {
+    el.calendarCrudTitle.textContent = action === 'create' ? 'Create Event' : 'Update Event';
+  }
+  if (el.calendarCrudSubmit) {
+    el.calendarCrudSubmit.textContent = action === 'create' ? 'Create Event' : 'Update Event';
+    el.calendarCrudSubmit.classList.toggle('primary', action === 'create');
+    el.calendarCrudSubmit.classList.toggle('secondary', action !== 'create');
+  }
+  if (el.calendarCrudReset) {
+    el.calendarCrudReset.classList.toggle('hidden', action === 'create');
+  }
+  updateCalendarFormButtonState(action);
+}
+
+function buildCalendarPayload(action) {
+  const formState = getCalendarFormState(action);
+  const payload = { action };
+  Object.entries(formState.values).forEach(([key, value]) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+    if (typeof value === 'string') {
+      const text = key === 'content' ? value : value.trim();
+      if (!text) {
+        return;
+      }
+      payload[key] = key === 'content' ? value : text;
+    } else {
+      payload[key] = value;
+    }
+  });
+  return payload;
+}
+
+async function handleCalendarFormSubmit(action) {
+  const targetAction = action || getActiveCalendarAction();
+  const payload = buildCalendarPayload(targetAction);
+  if (!payload) return;
+  const success = await mutateStore('calendar', payload);
+  if (success && targetAction === 'create') {
+    resetCalendarForm('create');
+    setCalendarCrudAction('create');
+  } else if (success && targetAction === 'update' && payload.id) {
+    hydrateCalendarFormFromId(payload.id);
+    renderCalendarCrudForm();
+  } else if (!success && targetAction === 'create') {
+    renderCalendarCrudForm();
+  }
 }
 
 // WHAT: render the calendar store list inside the Data panel.
@@ -3409,79 +4882,251 @@ function renderTodos() {
 function renderCalendar() {
   if (!el.calendarPanel) return;
   el.calendarPanel.innerHTML = '';
-  const rows = sortNewestFirst(state.dataStores.calendar, 'start');
+  const rows = sortCalendarEvents(state.dataStores.calendar);
+  const selectedCalendarId = getSelectedDataRow('calendar');
+  const highlightActive = getActiveCalendarAction() === 'update' && selectedCalendarId;
   rows.forEach((event) => {
     const tr = document.createElement('tr');
+    if (event.id) {
+      tr.dataset.calendarId = event.id;
+    }
+    if (highlightActive && String(selectedCalendarId) === String(event.id)) {
+      tr.classList.add('selected-row');
+    }
     const title = document.createElement('td');
+    title.className = 'calendar-title';
     title.textContent = event.title || 'Untitled';
-    const start = document.createElement('td');
-    start.textContent = event.start || '—';
+    const content = document.createElement('td');
+    content.className = 'calendar-content';
+    if (event.content) {
+      const text = event.content.length > 200 ? `${event.content.slice(0, 200)}…` : event.content;
+      content.textContent = text;
+    } else {
+      content.textContent = '—';
+    }
     const end = document.createElement('td');
-    end.textContent = event.end || '—';
+    end.className = 'calendar-end';
+    end.textContent = event.end ? formatDanishDateString(event.end) : '—';
+    const actions = document.createElement('td');
+    actions.className = 'calendar-actions';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'button ghost';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.disabled = !event.id;
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!event.id) return;
+      deleteBtn.disabled = true;
+      try {
+        await mutateStore('calendar', {
+          action: 'delete',
+          id: event.id,
+          title: event.title,
+        });
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
     tr.appendChild(title);
-    tr.appendChild(start);
+    tr.appendChild(content);
     tr.appendChild(end);
+    tr.appendChild(actions);
+    tr.addEventListener('click', () => selectCalendarForUpdate(event));
     el.calendarPanel.appendChild(tr);
   });
 }
 
-// WHAT: render the kitchen tips store grid.
-// WHY: reviewers double-check CRUD mutations and copy ids/titles easily.
-// HOW: sort tips alphabetically, show title/keywords/link, and include IDs for reference.
-function renderKitchen() {
-  if (!el.kitchenList) return;
-  el.kitchenList.innerHTML = '';
-  const tips = sortNewestFirst(state.dataStores.kitchen_tips);
-  tips.forEach((tip) => {
-    const li = document.createElement('li');
-    const title = document.createElement('strong');
-    title.textContent = tip.title || 'Untitled tip';
-    li.appendChild(title);
-    if (tip.content) {
-      const body = document.createElement('p');
-      body.textContent = tip.content;
-      li.appendChild(body);
+function applyCalendarSelectionFromState() {
+  const selectedId = getSelectedDataRow('calendar');
+  if (!selectedId) {
+    if (getActiveCalendarAction() === 'update') {
+      setCalendarCrudAction('create');
     }
-    if (Array.isArray(tip.keywords) && tip.keywords.length) {
-      const keywords = document.createElement('p');
-      keywords.className = 'meta';
-      keywords.textContent = `Keywords: ${tip.keywords.join(', ')}`;
-      li.appendChild(keywords);
+    return;
+  }
+  const match = (state.dataStores.calendar || []).find(
+    (event) => String(event.id) === String(selectedId),
+  );
+  if (!match) {
+    clearSelectedDataRow('calendar');
+    if (getActiveCalendarAction() === 'update') {
+      setCalendarCrudAction('create');
     }
-    if (tip.link) {
-      const link = document.createElement('a');
-      link.href = tip.link;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      link.textContent = 'View tip';
-      li.appendChild(link);
-    }
-    el.kitchenList.appendChild(li);
-  });
+    return;
+  }
+  hydrateCalendarFormFromId(match.id);
+  setCalendarCrudAction('update');
+  renderCalendar();
 }
 
-// WHAT: render the app guide knowledge base section.
-// WHY: same as other stores—gives reviewers immediate insight into stored sections.
+// WHAT: render the kitchen tips data table.
+// WHY: reviewers need quick visibility into stored tips and the ability to edit/delete entries from the dashboard.
+// HOW: sort using the active column, build table rows with truncated text/link badges, and attach delete/select handlers.
+function renderKitchen() {
+  if (!el.kitchenPanel) return;
+  el.kitchenPanel.innerHTML = '';
+  const rows = sortKitchenTips(state.dataStores.kitchen_tips);
+  const selectedKitchenId = getSelectedDataRow('kitchen_tips');
+  const highlightActive = getActiveKitchenAction() === 'update' && selectedKitchenId;
+  rows.forEach((tip) => {
+    const tr = document.createElement('tr');
+    if (tip.id) {
+      tr.dataset.kitchenId = tip.id;
+    }
+    if (highlightActive && String(selectedKitchenId) === String(tip.id)) {
+      tr.classList.add('selected-row');
+    }
+    const title = document.createElement('td');
+    title.className = 'kitchen-title';
+    title.textContent = tip.title || 'Untitled tip';
+    const content = document.createElement('td');
+    content.className = 'kitchen-content';
+    if (tip.content) {
+      const text = tip.content.length > 200 ? `${tip.content.slice(0, 200)}…` : tip.content;
+      content.textContent = text;
+    } else {
+      content.textContent = '—';
+    }
+    const keywords = document.createElement('td');
+    keywords.className = 'kitchen-keywords';
+    if (Array.isArray(tip.keywords) && tip.keywords.length) {
+      keywords.textContent = tip.keywords.join(', ');
+    } else if (typeof tip.keywords === 'string' && tip.keywords.trim()) {
+      keywords.textContent = tip.keywords;
+    } else {
+      keywords.textContent = '—';
+    }
+    const linkCell = document.createElement('td');
+    linkCell.className = 'kitchen-link';
+    if (tip.link) {
+      const anchor = document.createElement('a');
+      anchor.href = tip.link;
+      anchor.target = '_blank';
+      anchor.rel = 'noreferrer';
+      anchor.textContent = 'Link';
+      anchor.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      linkCell.appendChild(anchor);
+    } else {
+      const placeholder = document.createElement('span');
+      placeholder.textContent = 'Link';
+      placeholder.className = 'link-disabled';
+      linkCell.appendChild(placeholder);
+    }
+    const actions = document.createElement('td');
+    actions.className = 'kitchen-actions';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'button ghost';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.disabled = !tip.id;
+    deleteBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (!tip.id) return;
+      deleteBtn.disabled = true;
+      try {
+        await mutateStore('kitchen_tips', {
+          action: 'delete',
+          id: tip.id,
+          title: tip.title,
+        });
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+    tr.appendChild(title);
+    tr.appendChild(content);
+    tr.appendChild(keywords);
+    tr.appendChild(linkCell);
+    tr.appendChild(actions);
+    tr.addEventListener('click', () => selectKitchenForUpdate(tip));
+    el.kitchenPanel.appendChild(tr);
+  });
+  renderKitchenSortIndicators();
+}
+
+// WHAT: render the Notes knowledge base section.
+// WHY: mirrors other stores—lets reviewers scan Sections + content quickly.
 // HOW: sort by title, show keywords/link/content snippet, and annotate with IDs.
-function renderGuide() {
+function renderNotes() {
   if (!el.guideList) return;
   el.guideList.innerHTML = '';
-  const entries = sortNewestFirst(state.dataStores.app_guide);
+  const entries = state.dataStores.app_guide || [];
   entries.forEach((entry) => {
-    const li = document.createElement('li');
+    const wrapper = document.createElement('li');
+    wrapper.className = 'notes-section';
+    const header = document.createElement('div');
+    header.className = 'notes-section-header';
     const title = document.createElement('strong');
     title.textContent = `${entry.id || 'section'}: ${entry.title || 'Untitled'}`;
-    li.appendChild(title);
+    header.appendChild(title);
+    const deleteSection = document.createElement('button');
+    deleteSection.type = 'button';
+    deleteSection.className = 'button ghost notes-delete-section';
+    deleteSection.textContent = 'Delete Section';
+    deleteSection.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (!entry.id) return;
+      deleteSection.disabled = true;
+      try {
+        await mutateStore('app_guide', {
+          action: 'delete',
+          id: entry.id,
+        });
+      } finally {
+        deleteSection.disabled = false;
+      }
+    });
+    header.appendChild(deleteSection);
+    wrapper.appendChild(header);
     if (entry.content) {
-      const body = document.createElement('p');
-      body.textContent = entry.content.slice(0, 160) + (entry.content.length > 160 ? '…' : '');
-      li.appendChild(body);
+      const paragraphs = entry.content.split(/\n{2,}/).filter(Boolean);
+      paragraphs.forEach((para) => {
+        const row = document.createElement('div');
+        row.className = 'notes-entry-row';
+        const body = document.createElement('p');
+        body.textContent = para;
+        row.appendChild(body);
+        if (entry.id) {
+          const deleteEntry = document.createElement('button');
+          deleteEntry.type = 'button';
+          deleteEntry.className = 'notes-entry-delete';
+          deleteEntry.textContent = '×';
+          deleteEntry.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            deleteEntry.disabled = true;
+            try {
+              const chunks = (entry.content || '').split(/\n{2,}/).filter(Boolean);
+              const removeIndex = paragraphs.indexOf(para);
+              if (removeIndex !== -1) {
+                chunks.splice(removeIndex, 1);
+                await mutateStore('app_guide', {
+                  action: 'overwrite',
+                  id: entry.id,
+                  title: entry.title,
+                  content: chunks.join('\n\n'),
+                  keywords: entry.keywords,
+                  link: entry.link,
+                });
+              }
+            } finally {
+              deleteEntry.disabled = false;
+            }
+          });
+          row.appendChild(deleteEntry);
+        }
+        wrapper.appendChild(row);
+      });
     }
     if (Array.isArray(entry.keywords) && entry.keywords.length) {
       const keywords = document.createElement('p');
       keywords.className = 'meta';
       keywords.textContent = `Keywords: ${entry.keywords.join(', ')}`;
-      li.appendChild(keywords);
+      wrapper.appendChild(keywords);
     }
     if (entry.link) {
       const link = document.createElement('a');
@@ -3489,9 +5134,23 @@ function renderGuide() {
       link.target = '_blank';
       link.rel = 'noreferrer';
       link.textContent = 'Open link';
-      li.appendChild(link);
+      wrapper.appendChild(link);
     }
-    el.guideList.appendChild(li);
+    el.guideList.appendChild(wrapper);
+  });
+  updateNotesSectionOptions();
+}
+
+function updateNotesSectionOptions() {
+  const titles = getNoteSectionTitles();
+  const datalist = document.querySelector(`#${NOTES_SECTION_DATALIST_ID}`);
+  if (!datalist) return;
+  datalist.innerHTML = '';
+  titles.forEach((title) => {
+    if (!title) return;
+    const option = document.createElement('option');
+    option.value = title;
+    datalist.appendChild(option);
   });
 }
 
@@ -3504,15 +5163,21 @@ async function loadStore(store) {
   if (store === 'todos') {
     state.dataStores.todos = data.todos || [];
     renderTodos();
+    renderTodoCrudForm();
+    applyTodoSelectionFromState();
   } else if (store === 'calendar') {
     state.dataStores.calendar = data.events || [];
     renderCalendar();
+    renderCalendarCrudForm();
+    applyCalendarSelectionFromState();
   } else if (store === 'kitchen_tips') {
     state.dataStores.kitchen_tips = data.tips || [];
     renderKitchen();
+    renderKitchenCrudForm();
+    applyKitchenSelectionFromState();
   } else if (store === 'app_guide') {
     state.dataStores.app_guide = data.sections || [];
-    renderGuide();
+    renderNotes();
   }
   renderIntendedEntities();
 }
@@ -3531,6 +5196,32 @@ function refreshActiveDataTab() {
   return loadStore(state.activeDataTab);
 }
 
+function updateDataTabUI() {
+  if (!el.dataTabs || !el.dataPanels) return;
+  el.dataTabs.forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.store === state.activeDataTab);
+  });
+  el.dataPanels.forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.store === state.activeDataTab);
+  });
+}
+
+function setActiveDataTab(target, options = {}) {
+  const normalized = DATA_STORE_IDS.includes(target) ? target : 'todos';
+  const { skipRefresh = false, persist = true, force = false } = options;
+  if (!force && state.activeDataTab === normalized) {
+    return;
+  }
+  state.activeDataTab = normalized;
+  updateDataTabUI();
+  if (persist) {
+    persistActiveDataTab();
+  }
+  if (!skipRefresh) {
+    refreshActiveDataTab();
+  }
+}
+
 async function mutateStore(store, payload) {
   try {
     await fetchJSON(`/api/data/${store}`, {
@@ -3539,8 +5230,10 @@ async function mutateStore(store, payload) {
     });
     showToast('Store updated');
     await loadStore(store);
+    return true;
   } catch (err) {
     showToast(err.message || 'Update failed', 'error');
+    return false;
   }
 }
 
@@ -3780,61 +5473,61 @@ function wireEvents() {
   });
   el.dataRefresh?.addEventListener('click', () => refreshStores([state.activeDataTab]));
 
-  el.todoForm?.addEventListener('submit', async (event) => {
+  el.todoCrudForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const formData = new FormData(el.todoForm);
-    await mutateStore('todos', {
-      action: 'create',
-      title: formData.get('title'),
-      deadline: formData.get('deadline') || undefined,
+    await handleTodoFormSubmit();
+  });
+  el.todoCrudReset?.addEventListener('click', () => {
+    resetTodoForm('create');
+    setTodoCrudAction('create');
+  });
+  el.todoSortButtons?.forEach((button) => {
+    button.addEventListener('click', () => {
+      const column = button.dataset.todoSort;
+      setTodoSort(column);
     });
-    el.todoForm.reset();
+  });
+  el.calendarSortButtons?.forEach((button) => {
+    button.addEventListener('click', () => {
+      const column = button.dataset.calendarSort;
+      setCalendarSort(column);
+    });
+  });
+  el.kitchenSortButtons?.forEach((button) => {
+    button.addEventListener('click', () => {
+      const column = button.dataset.kitchenSort;
+      setKitchenSort(column);
+    });
   });
 
-  el.kitchenForm?.addEventListener('submit', async (event) => {
+  el.kitchenCrudForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const formData = new FormData(el.kitchenForm);
-    const keywords = (formData.get('keywords') || '')
-      .toString()
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
-    await mutateStore('kitchen_tips', {
-      action: 'create',
-      title: formData.get('title'),
-      content: formData.get('content'),
-      keywords,
-      link: formData.get('link') || undefined,
-    });
-    el.kitchenForm.reset();
+    await handleKitchenFormSubmit();
+  });
+  el.kitchenCrudReset?.addEventListener('click', () => {
+    resetKitchenForm('create');
+    setKitchenCrudAction('create');
   });
 
-  el.calendarForm?.addEventListener('submit', async (event) => {
+  el.calendarCrudForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const formData = new FormData(el.calendarForm);
-    await mutateStore('calendar', {
-      action: 'create',
-      title: formData.get('title'),
-      start: formData.get('start'),
-      end: formData.get('end') || undefined,
-      location: formData.get('location') || undefined,
-    });
-    el.calendarForm.reset();
+    await handleCalendarFormSubmit();
+  });
+  el.calendarCrudReset?.addEventListener('click', () => {
+    resetCalendarForm('create');
+    setCalendarCrudAction('create');
   });
 
   el.guideForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(el.guideForm);
-    const id = (formData.get('id') || '').toString().trim();
     const keywords = (formData.get('keywords') || '')
       .toString()
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean);
-    const existing = state.dataStores.app_guide.some((entry) => entry.id === id);
     await mutateStore('app_guide', {
-      action: existing ? 'update' : 'create',
-      id,
+      action: 'create',
       title: formData.get('title'),
       content: formData.get('content'),
       keywords,
@@ -3887,11 +5580,8 @@ function wireEvents() {
   el.dataTabs.forEach((button) => {
     button.addEventListener('click', () => {
       const target = button.dataset.store;
-      if (!target || target === state.activeDataTab) return;
-      state.activeDataTab = target;
-      el.dataTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.store === target));
-      el.dataPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.store === target));
-      refreshActiveDataTab();
+      if (!target) return;
+      setActiveDataTab(target);
     });
   });
 
@@ -3929,14 +5619,20 @@ function wireEvents() {
     hideRelatedPromptOptions();
   });
 
+  renderTodoCrudForm();
+  renderCalendarCrudForm();
+  renderKitchenCrudForm();
 }
 
 // WHAT: initialize the Tier‑5 dashboard and kick off background polling.
 // WHY: ensures listeners, cached state, initial data, and periodic refreshes are ready before reviewers interact.
 // HOW: wire events, restore stored UI state, fetch intents/stats/pending items, and start the auto-refresh interval.
 async function bootstrap() {
+  restoreDataPanelState();
   ensureReviewerId();
+  disableAutofill();
   wireEvents();
+  setActiveDataTab(state.activeDataTab, { force: true, skipRefresh: true, persist: false });
   setChatStatus('Ready');
   window.scrollTo(0, 0);
   loadStoredChatHistory();
@@ -3971,7 +5667,7 @@ const INTENT_LABELS = {
   todo_list: 'Todo tool',
   kitchen_tips: 'Kitchen tips tool',
   calendar_edit: 'Calendar tool',
-  app_guide: 'App guide tool',
+  app_guide: 'Notes tool',
   nlu_fallback: 'LLM fallback',
 };
 

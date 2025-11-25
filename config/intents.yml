@@ -34,7 +34,7 @@ intents:
       - delete
   - name: app_guide
     tool: app_guide
-    description: "Modify or inspect the App Guide knowledge base."
+    description: "Modify or inspect the Notes knowledge base."
     actions:
       - list
       - find

@@ -66,7 +66,7 @@ def _looks_like_list(tool: str, message: str, payload: Dict[str, Any]) -> bool:
         "kitchen_tips": ["show kitchen", "list kitchen", "kitchen tips", "tips"],
         "todo_list": ["list todos", "show todos", "open tasks", "todo list"],
         "calendar_edit": ["show calendar", "list events", "calendar"],
-        "app_guide": ["show guide", "list sections", "app guide"],
+        "app_guide": ["show guide", "list sections", "app guide", "show notes", "notes"],
     }
     return any(phrase in lowered for phrase in keywords.get(tool, []))
 

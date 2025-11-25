@@ -1,13 +1,14 @@
-"""Tool wrapper around the App Guide knowledge base."""
+"""Tool wrapper around the Notes knowledge base."""
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from knowledge.app_guide import AppGuideStore
 from core.tooling.query_helpers import best_effort_keywords, rank_entries, tokenize_keywords
 
-    # WHAT: handle list/find/create/update/delete for the App Guide knowledge store.
+    # WHAT: handle list/find/create/update/delete for the Notes knowledge store.
     # WHY: keeping RAG-style knowledge in one tool prevents drift between router flows and reviewer corrections.
     # HOW: normalize action aliases, resolve ids/titles/keywords, validate inputs, and call `AppGuideStore` with dry-run support.
 def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
@@ -64,21 +65,37 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
     if action == "create":
         entry_id = _coerce_id(payload)
         title = str(payload.get("title") or "").strip()
-        content = str(payload.get("content") or "").strip()
-        link = _coerce_link(payload)
-        keywords = _parse_keywords(payload.get("keywords"))
-        if not entry_id:
-            return _error("create", "missing_id", "Provide an id to create an entry.")
+        note = str(payload.get("content") or "").strip()
+        link = payload.get("link")
+        keywords = payload.get("keywords")
         if not title:
-            return _error("create", "missing_title", "Knowledge entries require a title.")
-        if store.get_section(entry_id):
-            return _error("create", "already_exists", f"Section '{entry_id}' already exists.")
-        entry = store.upsert_section(entry_id, title, content, keywords=keywords, link=link, dry_run=dry_run)
+            return _error("create", "missing_title", "Notes require a section name.")
+        if not note:
+            return _error("create", "missing_content", "Notes require content.")
+        existing_section = None
+        if not entry_id:
+            existing_section = store.find_by_title(title)
+            if existing_section:
+                entry_id = existing_section["id"]
+        if not entry_id:
+            entry_id = _generate_entry_id(title, store)
+        insert_mode = str(payload.get("insert_mode") or "top").strip().lower()
+        position = "bottom" if insert_mode in {"bottom", "append", "end"} else "top"
+        entry = store.insert_note(
+            entry_id,
+            title or entry_id,
+            note,
+            position=position,
+            keywords=_parse_keywords(keywords) if keywords is not None else None,
+            link=_coerce_link(payload),
+            dry_run=dry_run,
+        )
         return {
             "type": "app_guide",
             "domain": "knowledge",
             "action": "create",
             "section": entry,
+            "insert_position": position,
         }
 
     if action == "update":
@@ -93,7 +110,7 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
         link_raw = _coerce_link(payload)
         keywords_raw = payload.get("keywords")
         if title_raw is None and content_raw is None:
-            return _error("update", "missing_fields", "Provide a new title and/or content to update the entry.")
+            return _error("update", "missing_fields", "Provide a new section title and/or content to update.")
         title = str(title_raw).strip() if title_raw is not None else existing.get("title", "")
         content = str(content_raw).strip() if content_raw is not None else existing.get("content", "")
         keywords = (
@@ -102,7 +119,7 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
             else existing.get("keywords", [])
         )
         if not title:
-            return _error("update", "missing_title", "Knowledge entries require a title.")
+            return _error("update", "missing_title", "Notes sections require a title.")
         entry = store.upsert_section(
             entry_id,
             title,
@@ -116,6 +133,36 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
             "domain": "knowledge",
             "action": "update",
             "section": entry,
+        }
+
+    if action == "overwrite":
+        entry_id = _resolve_entry_id(payload, store)
+        if not entry_id:
+            return _error("overwrite", "missing_id", "Section ID or title is required.")
+        content = str(payload.get("content") or "").strip()
+        if content:
+            section = store.overwrite_section(
+                entry_id,
+                str(payload.get("title") or ""),
+                content,
+                keywords=_parse_keywords(payload.get("keywords")) if payload.get("keywords") is not None else None,
+                link=_coerce_link(payload),
+                dry_run=dry_run,
+            )
+        else:
+            section = store.overwrite_section(
+                entry_id,
+                str(payload.get("title") or ""),
+                "",
+                keywords=_parse_keywords(payload.get("keywords")) if payload.get("keywords") is not None else None,
+                link=_coerce_link(payload),
+                dry_run=dry_run,
+            )
+        return {
+            "type": "app_guide",
+            "domain": "knowledge",
+            "action": "overwrite",
+            "section": section,
         }
 
     if action == "delete":
@@ -133,29 +180,29 @@ def run(payload: Dict[str, Any], *, dry_run: bool = False) -> Dict[str, Any]:
             "id": entry_id,
         }
 
-    return _error(action, "unsupported_action", f"Knowledge action '{action}' is not supported.")
+    return _error(action, "unsupported_action", f"Notes action '{action}' is not supported.")
 
 
-    # WHAT: turn structured App Guide tool payloads into reviewer-facing text.
+    # WHAT: turn structured Notes tool payloads into reviewer-facing text.
     # WHY: ensures list/find/create/update/delete replies remain consistent across CLI, router, and Tier‑5.
     # HOW: branch on action, include IDs/titles/content snippets, and fall back to friendly errors.
 def format_app_guide_response(result: Dict[str, Any]) -> str:
 
     if "error" in result:
-        return result.get("message", "Knowledge command failed.")
+        return result.get("message", "Notes command failed.")
 
     action = result.get("action")
     if action == "list":
         sections = result.get("sections") or []
         if not sections:
-            return "Knowledge base is empty."
+            return "Notes are empty."
         lines = [f"- {entry['id']}: {entry['title']}" for entry in sections]
-        return "Knowledge sections:\n" + "\n".join(lines)
+        return "Notes sections:\n" + "\n".join(lines)
 
     if action == "find":
         sections = result.get("sections") or []
         if not sections:
-            return f"No knowledge sections match '{result.get('query', 'your search')}'."
+            return f"No sections match '{result.get('query', 'your search')}'."
         if result.get("exact_match"):
             section = sections[0]
             message = f"Section '{section.get('id')}' — {section.get('title')}\n{section.get('content', '').strip()}"
@@ -167,21 +214,26 @@ def format_app_guide_response(result: Dict[str, Any]) -> str:
 
     if action == "create":
         section = result.get("section") or {}
-        return f"Created knowledge section '{section.get('id')}'."
+        position = result.get("insert_position")
+        if position == "bottom":
+            return f"Appended note to section '{section.get('id')}'."
+        return f"Added note to section '{section.get('id')}'."
 
     if action == "update":
         section = result.get("section") or {}
-        return f"Updated knowledge section '{section.get('id')}'."
+        return f"Updated section '{section.get('id')}'."
 
     if action == "delete":
-        return f"Deleted knowledge section '{result.get('id')}'."
+        return f"Deleted section '{result.get('id')}'."
 
-    return "Knowledge request completed."
+    return "Notes request completed."
 
 
 def _resolve_action(action: str, payload: Dict[str, Any], store: AppGuideStore) -> str:
     if action in {"get", "search"}:
         return "find"
+    if action == "overwrite":
+        return "overwrite"
     if action == "upsert":
         entry_id = _coerce_id(payload)
         if entry_id:
@@ -249,6 +301,23 @@ def _coerce_link(payload: Dict[str, Any]) -> Optional[str]:
         return None
     text = str(link).strip()
     return text or None
+
+
+def _generate_entry_id(title: str, store: AppGuideStore) -> str:
+    base = _slugify(title)
+    if not base:
+        base = "note"
+    sections = {section["id"] for section in store.list_sections()}
+    candidate = base
+    suffix = 2
+    while candidate in sections:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
 __all__ = ["run", "format_app_guide_response"]

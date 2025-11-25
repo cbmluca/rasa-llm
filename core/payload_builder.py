@@ -108,7 +108,7 @@ class PayloadBuilder:
         return payload
 
     def _build_app_guide(self, message: str) -> Dict[str, Any]:
-        """WHAT: normalize app guide prompts to CRUD verbs.
+        """WHAT: normalize Notes prompts to CRUD verbs.
 
         WHY: knowledge-base edits run through the same reviewer tooling, so the
         classifier must emit clear upsert/list/delete hints.

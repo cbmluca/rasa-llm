@@ -1,4 +1,4 @@
-"""Tests for the Tier-3 app guide knowledge store."""
+"""Tests for the Tier-3 Notes knowledge store."""
 
 from __future__ import annotations
 
@@ -80,3 +80,32 @@ def test_find_by_title_handles_case(tmp_path: Path) -> None:
     assert found["keywords"] == ["intro"]
 
     assert store.find_by_title("missing") is None
+
+
+def test_insert_note_prepends_by_default(tmp_path: Path) -> None:
+    store = AppGuideStore(tmp_path / "app_guide.json")
+    first = store.insert_note("future_work", "Future Work", "First note.")
+    assert first["content"] == "First note."
+
+    second = store.insert_note("future_work", "", "Second note.", position="top")
+    assert second["content"].startswith("Second note.")
+    assert "First note." in second["content"]
+
+    third = store.insert_note("future_work", "", "Third note.", position="bottom")
+    assert third["content"].endswith("Third note.")
+
+
+def test_section_order_is_preserved(tmp_path: Path) -> None:
+    storage_path = tmp_path / "notes" / "app_guide.json"
+    store = AppGuideStore(storage_path)
+    store.insert_note("alpha", "Alpha", "First")
+    store.insert_note("beta", "Beta", "Second")
+    store.insert_note("gamma", "Gamma", "Third")
+
+    sections = store.list_sections()
+    assert [section["id"] for section in sections] == ["alpha", "beta", "gamma"]
+
+    # inserting a new note into an existing section shouldn't change order
+    store.insert_note("beta", "", "Another", position="bottom")
+    sections = store.list_sections()
+    assert [section["id"] for section in sections] == ["alpha", "beta", "gamma"]

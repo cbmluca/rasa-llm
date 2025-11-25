@@ -155,7 +155,7 @@
         </section>
 
         <!--
-          WHAT: Live data store viewer/editor for todos, calendar, kitchen tips, and app guide.
+        WHAT: Live data store viewer/editor for todos, calendar, kitchen tips, and notes.
           WHY: Reviewers verify CRUD outcomes or manually patch JSON stores without CLI access.
           HOW: Tabs switch between tool-backed tables/forms whose submit events call the API.
         -->
@@ -170,65 +170,129 @@
             <button class="data-tab active" data-store="todos">Todos</button>
             <button class="data-tab" data-store="calendar">Calendar</button>
             <button class="data-tab" data-store="kitchen_tips">Kitchen Tips</button>
-            <button class="data-tab" data-store="app_guide">App Guide</button>
+            <button class="data-tab" data-store="app_guide">Notes</button>
           </div>
           <div class="data-panels">
             <div class="data-panel-view active" data-store="todos">
-              <table class="data-table tight">
+              <div class="todo-crud-card">
+                <div class="todo-crud-header">
+                  <div>
+                    <h3 id="todo-crud-title">Create Todo</h3>
+                  </div>
+                  <button id="todo-reset-button" class="button ghost hidden" type="button">New Todo</button>
+                </div>
+                <form id="todo-crud-form">
+                  <div class="field-grid" id="todo-crud-grid"></div>
+                  <div class="form-actions">
+                    <button id="todo-crud-submit" class="button primary" type="submit" disabled>Create Todo</button>
+                  </div>
+                </form>
+              </div>
+              <table class="data-table tight todos-table">
                 <thead>
                   <tr>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Deadline</th>
+                    <th class="col-title">
+                      <button class="sort-button" type="button" data-todo-sort="title">Title</button>
+                    </th>
+                    <th class="col-status">
+                      <button class="sort-button" type="button" data-todo-sort="status">Status</button>
+                    </th>
+                    <th class="col-deadline">
+                      <button class="sort-button" type="button" data-todo-sort="deadline">Deadline</button>
+                    </th>
+                    <th class="col-actions"></th>
                   </tr>
                 </thead>
                 <tbody id="todos-panel"></tbody>
               </table>
-              <form id="todo-form" class="inline-form">
-                <input name="title" placeholder="New todo" required />
-                <input name="deadline" placeholder="Deadline (YYYY-MM-DD)" />
-                <button class="button primary" type="submit">Add Todo</button>
-              </form>
             </div>
             <div class="data-panel-view" data-store="calendar">
-              <table class="data-table tight">
+              <div class="calendar-crud-card">
+                <div class="calendar-crud-header">
+                  <div>
+                    <h3 id="calendar-crud-title">Create Event</h3>
+                  </div>
+                  <button id="calendar-reset-button" class="button ghost hidden" type="button">New Event</button>
+                </div>
+                <form id="calendar-crud-form">
+                  <div class="field-grid" id="calendar-crud-grid"></div>
+                  <div class="form-actions">
+                    <button id="calendar-crud-submit" class="button primary" type="submit" disabled>Create Event</button>
+                  </div>
+                </form>
+              </div>
+              <table class="data-table tight calendar-table">
                 <thead>
                   <tr>
-                    <th>Title</th>
-                    <th>Start</th>
-                    <th>End</th>
+                    <th class="calendar-title">
+                      <button class="sort-button" type="button" data-calendar-sort="title">Title</button>
+                    </th>
+                    <th class="calendar-content">
+                      <button class="sort-button" type="button" data-calendar-sort="content">Content</button>
+                    </th>
+                    <th class="calendar-end">
+                      <button class="sort-button" type="button" data-calendar-sort="end">End Date</button>
+                    </th>
+                    <th class="calendar-actions"></th>
                   </tr>
                 </thead>
                 <tbody id="calendar-panel"></tbody>
               </table>
-              <form id="calendar-form" class="inline-form">
-                <input name="title" placeholder="Event title" required />
-                <input name="start" placeholder="Start (ISO)" required />
-                <input name="end" placeholder="End (ISO)" />
-                <input name="location" placeholder="Location" />
-                <button class="button primary" type="submit">Add Event</button>
-              </form>
             </div>
             <div class="data-panel-view" data-store="kitchen_tips">
-              <ul class="list" id="kitchen-list"></ul>
-              <form id="kitchen-form" class="inline-form">
-                <input name="title" placeholder="Tip title" required />
-                <input name="keywords" placeholder="Keywords (comma separated)" />
-                <input name="link" placeholder="Link" />
-                <textarea name="content" placeholder="Tip details"></textarea>
-                <button class="button primary" type="submit">Add Tip</button>
-              </form>
+              <div class="kitchen-crud-card">
+                <div class="kitchen-crud-header">
+                  <div>
+                    <h3 id="kitchen-crud-title">Create Tip</h3>
+                  </div>
+                  <button id="kitchen-reset-button" class="button ghost hidden" type="button">New Tip</button>
+                </div>
+                <form id="kitchen-crud-form">
+                  <div class="field-grid" id="kitchen-crud-grid"></div>
+                  <div class="form-actions">
+                    <button id="kitchen-crud-submit" class="button primary" type="submit" disabled>Create Tip</button>
+                  </div>
+                </form>
+              </div>
+              <table class="data-table tight kitchen-table">
+                <thead>
+                  <tr>
+                    <th class="kitchen-title">
+                      <button class="sort-button" type="button" data-kitchen-sort="title">Title</button>
+                    </th>
+                    <th class="kitchen-content">
+                      <button class="sort-button" type="button" data-kitchen-sort="content">Content</button>
+                    </th>
+                    <th class="kitchen-keywords">
+                      <button class="sort-button" type="button" data-kitchen-sort="keywords">Keywords</button>
+                    </th>
+                    <th class="kitchen-link">
+                      <button class="sort-button" type="button" data-kitchen-sort="link">Link</button>
+                    </th>
+                    <th class="kitchen-actions"></th>
+                  </tr>
+                </thead>
+                <tbody id="kitchen-panel"></tbody>
+              </table>
             </div>
             <div class="data-panel-view" data-store="app_guide">
-              <ul class="list" id="guide-list"></ul>
               <form id="guide-form" class="inline-form">
-                <input name="id" placeholder="Entry ID" required />
-                <input name="title" placeholder="Title" required />
+                <div class="notes-section-field">
+                  <input
+                    id="guide-section-input"
+                    name="title"
+                    placeholder="Section"
+                    required
+                    list="notes-section-options"
+                    autocomplete="off"
+                  />
+                </div>
                 <input name="keywords" placeholder="Keywords (comma separated)" />
                 <input name="link" placeholder="Link" />
                 <textarea name="content" placeholder="Content" required></textarea>
-                <button class="button primary" type="submit">Save Section</button>
+                <button class="button primary" type="submit">Save Note</button>
               </form>
+              <ul class="list" id="guide-list"></ul>
             </div>
           </div>
         </section>
@@ -298,7 +362,7 @@
         <section class="panel training-panel" id="corrected-panel">
           <div class="panel-header">
             <div>
-              <h2>Labeled Prompt Pairs</h2>
+              <h2>Labeled Intent Pairs</h2>
             </div>
             <div class="subpanel-actions">
               <button id="corrected-refresh" class="button ghost">Refresh</button>
@@ -356,6 +420,7 @@
           </div>
         </section>
       </div>
+      <datalist id="notes-section-options"></datalist>
 
       <div class="page-view" id="governance-page">
         <section class="panel">

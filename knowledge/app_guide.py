@@ -44,19 +44,21 @@ class GuideEntry:
 
 
 class AppGuideStore:
-    """Manage the Tier-3 knowledge base persisted to a JSON file."""
+    """Manage the Notes knowledge base persisted to a JSON file."""
 
     def __init__(self, storage_path: Path | None = None) -> None:
         self._storage_path = storage_path or _DEFAULT_STORAGE_PATH
+        self._section_order: List[str] = []
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def list_sections(self) -> List[GuideEntryDict]:
-        """Return every stored section as a list sorted by id."""
+        """Return every stored section respecting the configured order."""
 
         sections = self._load_sections()
-        return [sections[sid].to_dict() for sid in sorted(sections)]
+        ordered_ids = self._ordered_ids(sections)
+        return [sections[sid].to_dict() for sid in ordered_ids]
 
     def get_section(self, entry_id: str) -> Optional[GuideEntryDict]:
         """Return the stored section matching ``entry_id`` if it exists."""
@@ -108,6 +110,94 @@ class AppGuideStore:
         )
         if not dry_run:
             sections[entry_id] = entry
+            self._ensure_order(sections, preferred_order=[entry_id])
+            self._write_sections(sections)
+        return entry.to_dict()
+
+    def insert_note(
+        self,
+        entry_id: str,
+        title: str,
+        note: str,
+        *,
+        position: str = "top",
+        keywords: Optional[List[str]] = None,
+        link: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> GuideEntryDict:
+        """Insert a note into the requested section (prepending by default)."""
+
+        if not entry_id.strip():
+            raise ValueError("id cannot be blank")
+        note_text = (note or "").strip()
+        if not note_text:
+            raise ValueError("content cannot be blank")
+
+        sections = self._load_sections()
+        entry = sections.get(entry_id)
+        if not entry:
+            entry = GuideEntry(
+                id=entry_id,
+                title=title.strip() or entry_id,
+                content="",
+                updated_at=_utc_timestamp(),
+                keywords=[],
+                link=None,
+            )
+        elif title.strip():
+            entry.title = title.strip()
+
+        existing = entry.content.strip()
+        if existing:
+            if position == "bottom":
+                entry.content = f"{existing}\n\n{note_text}"
+            else:
+                entry.content = f"{note_text}\n\n{existing}"
+        else:
+            entry.content = note_text
+
+        if keywords is not None:
+            merged = {kw.strip() for kw in entry.keywords or [] if kw.strip()}
+            merged.update({kw.strip() for kw in keywords if kw and kw.strip()})
+            entry.keywords = sorted(merged)
+        if link is not None:
+            entry.link = link or None
+
+        entry.updated_at = _utc_timestamp()
+        if not dry_run:
+            sections[entry_id] = entry
+            self._ensure_order(sections, preferred_order=[entry_id])
+            self._write_sections(sections)
+        return entry.to_dict()
+    
+    def overwrite_section(
+        self,
+        entry_id: str,
+        title: str,
+        content: str,
+        *,
+        keywords: Optional[List[str]] = None,
+        link: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> GuideEntryDict:
+        """Overwrite a section with new content."""
+
+        if not entry_id.strip():
+            raise ValueError("id cannot be blank")
+        sections = self._load_sections()
+        existing = sections.get(entry_id)
+        if not existing:
+            raise ValueError(f"Section '{entry_id}' does not exist.")
+        entry = GuideEntry(
+            id=entry_id,
+            title=title or existing.title,
+            content=content,
+            updated_at=_utc_timestamp(),
+            keywords=[kw.strip() for kw in (keywords or existing.keywords or []) if kw.strip()],
+            link=link if link is not None else existing.link,
+        )
+        if not dry_run:
+            sections[entry_id] = entry
             self._write_sections(sections)
         return entry.to_dict()
 
@@ -122,6 +212,8 @@ class AppGuideStore:
             return False
         if not dry_run:
             del sections[entry_id]
+            if entry_id in self._section_order:
+                self._section_order = [sid for sid in self._section_order if sid != entry_id]
             self._write_sections(sections)
         return True
 
@@ -154,11 +246,17 @@ class AppGuideStore:
         payload = json.loads(raw)
         sections_raw = payload.get("sections", {})
         if not isinstance(sections_raw, MutableMapping):
-            raise ValueError("Invalid app guide format: 'sections' must be a mapping")
+            raise ValueError("Invalid notes format: 'sections' must be a mapping")
+        order_raw = payload.get("order")
+        order: List[str] = []
+        if isinstance(order_raw, list):
+            for item in order_raw:
+                if isinstance(item, str) and item.strip():
+                    order.append(item.strip())
         sections: Dict[str, GuideEntry] = {}
         for section_key, item in sections_raw.items():
             if not isinstance(section_key, str):
-                raise ValueError("Invalid app guide format: section keys must be strings")
+                raise ValueError("Invalid notes format: section keys must be strings")
             if not isinstance(item, MutableMapping):
                 raise ValueError(f"Invalid section payload for '{section_key}'")
             entry_id = str(item.get("id") or section_key)
@@ -171,16 +269,41 @@ class AppGuideStore:
                 link=str(item.get("link", "")).strip() or None,
             )
             sections[entry_id] = entry
+        self._ensure_order(sections, preferred_order=order)
         return sections
 
     def _write_sections(self, sections: Dict[str, GuideEntry]) -> None:
         """Persist the provided sections atomically."""
 
-        payload = {"sections": {sid: entry.to_dict() for sid, entry in sections.items()}}
+        ordered_ids = self._ordered_ids(sections)
+        payload = {
+            "sections": {sid: sections[sid].to_dict() for sid in ordered_ids},
+            "order": ordered_ids,
+        }
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._storage_path.with_suffix(self._storage_path.suffix + ".tmp")
         tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
         os.replace(tmp_path, self._storage_path)
+
+    def _ordered_ids(self, sections: Dict[str, GuideEntry]) -> List[str]:
+        if not self._section_order:
+            return sorted(sections)
+        # ensure only existing ids in order, append missing at end
+        ordered = [sid for sid in self._section_order if sid in sections]
+        for sid in sections:
+            if sid not in ordered:
+                ordered.append(sid)
+        self._section_order = ordered
+        return ordered
+
+    def _ensure_order(self, sections: Dict[str, GuideEntry], preferred_order: Optional[List[str]] = None) -> None:
+        if preferred_order:
+            for sid in preferred_order:
+                if sid and sid not in self._section_order:
+                    self._section_order.append(sid)
+        for sid in sections:
+            if sid not in self._section_order:
+                self._section_order.append(sid)
 
 
 def _utc_timestamp() -> str:

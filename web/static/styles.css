@@ -629,7 +629,7 @@ body {
 }
 
 /*
- * WHAT: Responsive grid for dynamic field renderers (todo/calendar/kitchen/app guide).
+ * WHAT: Responsive grid for dynamic field renderers (todo/calendar/kitchen/notes).
  * WHY: Payload fields change per tool; this grid keeps forms balanced on large and small screens.
  * HOW: CSS grid with auto-fit columns, full-width overrides for content fields, and textarea tweaks.
  */
@@ -654,7 +654,8 @@ body {
   min-height: 80px;
 }
 
-.field-required label {
+.field-required label,
+.field-required span {
   color: #fcd34d;
 }
 
@@ -722,6 +723,7 @@ body {
   font-weight: 600;
   cursor: pointer;
   min-width: 140px;
+  color: #f8fafc;
 }
 
 .data-tab.active {
@@ -741,6 +743,169 @@ body {
 
 .data-panel-view.active {
   display: flex;
+}
+
+.todo-crud-card,
+.calendar-crud-card,
+.kitchen-crud-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.todo-crud-card h3,
+.calendar-crud-card h3,
+.kitchen-crud-card h3 {
+  margin: 4px 0 0;
+}
+
+.todo-crud-card form,
+.calendar-crud-card form,
+.kitchen-crud-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.todo-crud-card .field-grid,
+.calendar-crud-card .field-grid,
+.kitchen-crud-card .field-grid {
+  width: 100%;
+}
+
+.todo-crud-header,
+.calendar-crud-header,
+.kitchen-crud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.calendar-table .calendar-title {
+  width: 30%;
+}
+
+.calendar-table .calendar-content {
+  width: 50%;
+}
+
+.calendar-table .calendar-end,
+.calendar-table td.calendar-end {
+  width: 140px;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.calendar-table .calendar-actions,
+.calendar-table td.calendar-actions {
+  width: 110px;
+  text-align: right;
+}
+
+.kitchen-table .kitchen-title {
+  width: 20%;
+}
+
+.kitchen-table .kitchen-content {
+  width: 35%;
+}
+
+.kitchen-table .kitchen-keywords {
+  width: 20%;
+}
+
+.kitchen-table .kitchen-link,
+.kitchen-table td.kitchen-link {
+  width: 90px;
+  text-align: center;
+}
+
+.kitchen-table .kitchen-actions,
+.kitchen-table td.kitchen-actions {
+  width: 110px;
+  text-align: right;
+}
+
+.notes-section-field {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.notes-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notes-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.notes-delete-section {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+}
+
+.notes-entry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.notes-entry-row p {
+  flex: 1;
+  margin: 0;
+}
+
+.notes-entry-delete {
+  border: none;
+  background: transparent;
+  color: #f87171;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.data-panel-view[data-store="app_guide"] .list {
+  max-height: none;
+  overflow: visible;
+}
+
+.todos-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.todos-table tbody tr:hover {
+  background: rgba(75, 128, 255, 0.08);
+}
+
+.data-table tbody tr.selected-row {
+  background: var(--accent-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.data-table tbody tr.selected-row:hover {
+  background: var(--accent-bg);
+}
+
+.link-disabled {
+  color: #475569;
 }
 
 .panel-header {
@@ -866,6 +1031,55 @@ body {
 .data-table.tight td {
   font-size: 0.9rem;
   padding: 6px 4px;
+}
+
+.sort-button {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+}
+
+.sort-button::after {
+  content: '';
+  font-size: 0.7rem;
+  opacity: 0.65;
+}
+
+.sort-button[data-sort-state='asc']::after {
+  content: '↑';
+}
+
+.sort-button[data-sort-state='desc']::after {
+  content: '↓';
+}
+
+.todos-table .col-title {
+  width: 100%;
+}
+
+.todos-table .col-status,
+.todos-table td.col-status {
+  width: 110px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.todos-table .col-deadline,
+.todos-table td.col-deadline {
+  width: 150px;
+  white-space: nowrap;
+}
+
+.todos-table .col-actions,
+.todos-table td.col-actions {
+  width: 90px;
+  text-align: right;
 }
 
 #corrected-table thead th:nth-child(1),
@@ -1091,57 +1305,76 @@ body {
  * WHY: Calendar payloads require many short fields (dates/times/locations) arranged predictably.
  * HOW: Assign fixed grid columns/rows to each field wrapper when the calendar layout class is set.
  */
-#dynamic-field-grid.calendar-layout {
+#dynamic-field-grid.calendar-layout,
+.field-grid.calendar-layout {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper {
+#dynamic-field-grid.calendar-layout .field-wrapper,
+.field-grid.calendar-layout .field-wrapper {
   min-width: 0;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="title"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="title"],
+.field-grid.calendar-layout .field-wrapper[data-field="title"] {
   grid-column: 1;
   grid-row: 1;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-date"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-date"],
+.field-grid.calendar-layout .field-wrapper[data-field="start-date"] {
   grid-column: 2;
   grid-row: 1;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-date"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-date"],
+.field-grid.calendar-layout .field-wrapper[data-field="end-date"] {
   grid-column: 3;
   grid-row: 1;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="link"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="link"],
+.field-grid.calendar-layout .field-wrapper[data-field="link"] {
   grid-column: 4;
   grid-row: 1;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="location"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="location"],
+.field-grid.calendar-layout .field-wrapper[data-field="location"] {
   grid-column: 4;
   grid-row: 2;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-time"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="start-time"],
+.field-grid.calendar-layout .field-wrapper[data-field="start-time"] {
   grid-column: 2;
   grid-row: 2;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-time"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="end-time"],
+.field-grid.calendar-layout .field-wrapper[data-field="end-time"] {
   grid-column: 3;
   grid-row: 2;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="id"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="id"],
+.field-grid.calendar-layout .field-wrapper[data-field="id"] {
   grid-column: 1;
   grid-row: 2;
 }
 
-#dynamic-field-grid.calendar-layout .field-wrapper[data-field="notes"] {
+#dynamic-field-grid.calendar-layout .field-wrapper[data-field="notes"],
+.field-grid.calendar-layout .field-wrapper[data-field="notes"] {
   grid-column: 1 / span 4;
   grid-row: 3;
+}
+.calendar-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.calendar-table tbody tr:hover {
+  background: rgba(75, 128, 255, 0.08);
 }

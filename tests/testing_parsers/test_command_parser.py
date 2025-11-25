@@ -66,8 +66,8 @@ def test_news_language_marker_detection():
     assert result.payload.get("language") == "en"
 
 
-def test_app_guide_parser_detects_commands():
-    result = parse_command('list app guide sections')
+def test_notes_parser_detects_commands():
+    result = parse_command('list notes sections')
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "list"
@@ -130,27 +130,37 @@ def test_list_kitchen_tips_phrase():
     assert result.payload["action"] == "list"
 
 
-def test_app_guide_question_defaults_to_list():
-    result = parse_command("What App Guide sections do we have?")
+def test_notes_question_defaults_to_list():
+    result = parse_command("What Notes sections do we have?")
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "find"
 
 
-def test_app_guide_update_detects_section_id():
-    result = parse_command("Update the App Guide entry for tier_policies with a note about governance.")
+def test_notes_update_detects_section_id():
+    result = parse_command("Update the Notes entry for tier_policies with a note about governance.")
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "update"
     assert result.payload.get("id") == "tier_policies"
 
 
-def test_app_guide_get_with_quotes():
-    result = parse_command('Get App Guide section "tier_policies"')
+def test_notes_get_with_quotes():
+    result = parse_command('Get Notes section "tier_policies"')
     assert result is not None
     assert result.tool == "app_guide"
     assert result.payload["action"] == "find"
     assert result.payload.get("id") == "tier_policies"
+
+
+def test_notes_insert_mode_detection():
+    create_top = parse_command('Add Notes section "future_work" with "Ship feature"')
+    assert create_top is not None
+    assert create_top.payload.get("insert_mode") == "top"
+
+    create_bottom = parse_command("Append to notes section future_work")
+    assert create_bottom is not None
+    assert create_bottom.payload.get("insert_mode") == "bottom"
 
 
 def test_calendar_defaults_start_to_now(monkeypatch):
