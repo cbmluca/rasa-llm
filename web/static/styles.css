@@ -1146,6 +1146,11 @@ body {
   color: #94a3b8;
 }
 
+.chat-meta.offline {
+  color: #fbbf24;
+  font-style: italic;
+}
+
 .chat-form {
   display: flex;
   gap: 12px;
@@ -1179,6 +1184,26 @@ body {
 
 #voice-status {
   font-size: 0.75rem;
+}
+
+.offline-queue {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.offline-queue .hint {
+  margin: 0;
+}
+
+.offline-queue button {
+  flex-shrink: 0;
 }
 
 .subpanels {

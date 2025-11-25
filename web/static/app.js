@@ -740,6 +740,7 @@ const STORAGE_KEYS = {
   DATA_ACTIVE_TAB: 'tier5_data_active_tab',
   DATA_SELECTED_ROWS: 'tier5_data_selected_rows',
   VOICE_OFFLINE_LOG: 'tier5_voice_offline_attempts',
+  CHAT_OFFLINE_QUEUE: 'tier5_chat_offline_queue',
 };
 
 let pollTimer;
@@ -804,6 +805,9 @@ const state = {
   activeDataTab: 'todos',
   reviewerId: '',
   reviewerToken: '',
+  serviceWorkerReady: false,
+  offlineChatQueue: [],
+  offlineReplayActive: false,
   voice: {
     supported: false,
     mediaRecorder: null,
@@ -816,6 +820,7 @@ const state = {
     startedAt: null,
   },
   notifications: [],
+  initialized: false,
 };
 
 const el = {
@@ -825,6 +830,9 @@ const el = {
   chatStatus: document.querySelector('#chat-status'),
   chatVoiceButton: document.querySelector('#chat-voice-button'),
   voiceStatus: document.querySelector('#voice-status'),
+  offlineQueue: document.querySelector('#offline-queue'),
+  offlineQueueCount: document.querySelector('#offline-queue-count'),
+  offlineQueueRetryBtn: document.querySelector('#offline-queue-retry'),
   intentSelect: document.querySelector('#intent-select'),
   actionSelect: document.querySelector('#action-select'),
   relatedPromptsList: document.querySelector('#related-prompts-list'),
@@ -1022,6 +1030,8 @@ function setReviewerToken(value) {
       localStorage.setItem(STORAGE_KEYS.REVIEWER_TOKEN, state.reviewerToken);
     } else {
       localStorage.removeItem(STORAGE_KEYS.REVIEWER_TOKEN);
+      state.initialized = false;
+      stopPolling();
     }
   } catch (err) {
     // ignore storage issues
@@ -1029,15 +1039,20 @@ function setReviewerToken(value) {
 }
 
 function restoreReviewerToken() {
+  let restored = false;
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_TOKEN);
     if (stored) {
       state.reviewerToken = stored;
+      restored = true;
+    } else {
+      state.reviewerToken = '';
     }
   } catch (err) {
     // ignore
   }
   updateReviewerTokenBadge();
+  return restored;
 }
 
 function promptForReviewerToken() {
@@ -1049,17 +1064,23 @@ function promptForReviewerToken() {
   setReviewerToken(normalized);
   if (normalized) {
     showToast('Reviewer token saved.', 'success');
+    initializeAppData({ force: true });
     return true;
   }
   showToast('Reviewer token cleared. API calls will fail until you set one.', 'warning');
+  state.initialized = false;
   return false;
 }
 
 function ensureReviewerToken() {
-  restoreReviewerToken();
+  const restored = restoreReviewerToken();
   if (!state.reviewerToken) {
-    showToast('Set your reviewer token with the Token button to use the API.', 'warning');
+    if (!restored) {
+      showToast('Set your reviewer token with the Token button to use the API.', 'warning');
+    }
+    return false;
   }
+  return true;
 }
 
 function getReviewerToken() {
@@ -1417,8 +1438,13 @@ async function uploadVoiceClip(blob) {
     showToast('Voice message sent', 'success');
   } catch (err) {
     state.pendingChatEntry = null;
-    recordOfflineVoiceAttempt({ reason: err?.message || 'network_error', size: blob.size, mimeType: blob.type });
-    showToast(err.message || 'Voice upload failed', 'error');
+    const offline = typeof err?.message === 'string' && err.message.toLowerCase().includes('offline');
+    if (offline) {
+      recordOfflineVoiceAttempt({ reason: 'offline', size: blob.size, mimeType: blob.type });
+      showToast('Offline voice upload logged. Re-send when back online.', 'warning');
+    } else {
+      showToast(err?.message || 'Voice upload failed', 'error');
+    }
   } finally {
     state.voice.uploading = false;
     if (!state.voice.mediaError) {
@@ -1465,17 +1491,51 @@ function appendAssistantReply(reply) {
 }
 
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) {
+  const installHints = document.querySelectorAll('.install-hint');
+  const toggleInstallHints = (ready) => {
+    installHints.forEach((hint) => hint.classList.toggle('hidden', !ready));
+  };
+
+  const hasServiceWorker = 'serviceWorker' in navigator;
+  const controllerReady = hasServiceWorker && Boolean(navigator.serviceWorker.controller);
+  state.serviceWorkerReady = controllerReady;
+  toggleInstallHints(controllerReady);
+
+  if (!hasServiceWorker) {
     return;
   }
-  window.addEventListener('load', async () => {
-    try {
-      await navigator.serviceWorker.register('/static/service-worker.js');
-    } catch (err) {
-      console.warn('Service worker registration failed', err);
+
+  const markServiceWorkerReady = () => {
+    if (state.serviceWorkerReady) {
+      toggleInstallHints(true);
+      return;
     }
+    state.serviceWorkerReady = true;
+    toggleInstallHints(true);
+    showToast('Offline shell ready. Use Add to Home Screen for offline voice retries.', 'success');
+  };
+
+  navigator.serviceWorker
+    .register('/static/service-worker.js')
+    .then(() => navigator.serviceWorker.ready)
+    .then(() => markServiceWorkerReady())
+    .catch((err) => {
+      console.warn('Service worker registration failed', err);
+    });
+
+  if (!controllerReady) {
+    navigator.serviceWorker.addEventListener('controllerchange', markServiceWorkerReady);
+  }
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    if (state.serviceWorkerReady) {
+      return;
+    }
+    event.preventDefault();
+    showToast('Offline shell is still caching. Try Add to Home Screen after this message clears.', 'info');
   });
-  navigator.serviceWorker?.addEventListener('message', (event) => {
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data?.type === 'voice-upload-offline') {
       recordOfflineVoiceAttempt({ reason: 'offline_sw', ...(event.data?.meta || {}) });
       showToast('Offline voice upload logged. Re-send when back online.', 'warning');
@@ -1647,6 +1707,16 @@ function renderChat() {
         .filter(Boolean)
         .join(' · ');
       wrapper.appendChild(meta);
+    }
+    if (entry.offline) {
+      const offlineMeta = document.createElement('div');
+      offlineMeta.className = 'chat-meta offline';
+      const queuedAtDate = entry.queuedAt ? new Date(entry.queuedAt) : null;
+      const queuedAt = queuedAtDate && !Number.isNaN(queuedAtDate.getTime())
+        ? queuedAtDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : null;
+      offlineMeta.textContent = queuedAt ? `Queued offline · ${queuedAt}` : 'Queued offline';
+      wrapper.appendChild(offlineMeta);
     }
     el.chatLog.appendChild(wrapper);
   });
@@ -2295,6 +2365,196 @@ function persistChatHistory() {
     localStorage.setItem(STORAGE_KEYS.CHAT_HISTORY, JSON.stringify(trimmed));
   } catch (err) {
     // ignore
+  }
+}
+
+// WHAT: hydrate the offline chat queue from storage during bootstrap.
+// WHY: queued prompts should survive reloads so reviewers can resend them once connectivity returns.
+// HOW: read the serialized array, fall back to [], and store it on `state.offlineChatQueue`.
+function loadOfflineChatQueue() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.CHAT_OFFLINE_QUEUE);
+    if (!raw) {
+      state.offlineChatQueue = [];
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    state.offlineChatQueue = Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    state.offlineChatQueue = [];
+  }
+}
+
+// WHAT: persist the pending offline prompts so refreshes keep the queue intact.
+// WHY: reviewers may go offline for extended periods; cached prompts guarantee the retry button works after reloads.
+// HOW: stringify `state.offlineChatQueue` and write it to localStorage, swallowing quota errors.
+function persistOfflineChatQueue() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.CHAT_OFFLINE_QUEUE, JSON.stringify(state.offlineChatQueue || []));
+  } catch (err) {
+    // ignore
+  }
+}
+
+// WHAT: show/hide the offline queue banner + button.
+// WHY: reviewers need an at-a-glance indicator when prompts are waiting to resend.
+// HOW: toggle `.hidden`, update the count, and disable the retry button while resends are running.
+function renderOfflineQueueBanner() {
+  if (!el.offlineQueue) return;
+  const count = state.offlineChatQueue.length;
+  el.offlineQueue.classList.toggle('hidden', count === 0);
+  if (el.offlineQueueCount) {
+    el.offlineQueueCount.textContent = String(count);
+  }
+  if (el.offlineQueueRetryBtn) {
+    el.offlineQueueRetryBtn.disabled = state.offlineReplayActive || count === 0;
+    el.offlineQueueRetryBtn.textContent = state.offlineReplayActive ? 'Retrying…' : 'Retry offline prompts';
+  }
+}
+
+// WHAT: append a chat message to the offline queue when `/api/chat` is unavailable.
+// WHY: keeps reviewer prompts from disappearing when airplane mode drops the network mid-flight.
+// HOW: register a lightweight queue record, annotate the chat entry so the transcript shows “Queued offline,” persist both, and update the banner.
+function queueOfflineChatMessage(message, entry) {
+  if (!message) return;
+  if (entry?.queueId && state.offlineChatQueue.some((item) => item.id === entry.queueId)) {
+    entry.offline = true;
+    renderChat();
+    renderOfflineQueueBanner();
+    return;
+  }
+  const record = {
+    id: `offline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text: message,
+    createdAt: new Date().toISOString(),
+    retries: 0,
+  };
+  state.offlineChatQueue.push(record);
+  if (entry) {
+    entry.offline = true;
+    entry.queueId = record.id;
+    entry.queuedAt = record.createdAt;
+    persistChatHistory();
+    renderChat();
+  }
+  persistOfflineChatQueue();
+  renderOfflineQueueBanner();
+  showToast('Offline: prompt queued for resend.', 'warning');
+}
+
+// WHAT: delete a record from the offline queue and persist the change.
+// WHY: once prompts succeed we need to clear them so the banner + retries don’t duplicate messages.
+// HOW: splice the matching record, update storage, and refresh the banner.
+function removeOfflineChatRecord(queueId) {
+  if (!queueId) return;
+  const next = state.offlineChatQueue.filter((item) => item.id !== queueId);
+  if (next.length === state.offlineChatQueue.length) {
+    return;
+  }
+  state.offlineChatQueue = next;
+  persistOfflineChatQueue();
+  renderOfflineQueueBanner();
+}
+
+// WHAT: clear offline markers from a chat entry after it successfully replays.
+// WHY: once the backend acknowledges the prompt we should remove the “queued” badge from the transcript.
+// HOW: locate the entry with `queueId`, delete helper fields, and persist the history snapshot.
+function markChatEntryDelivered(queueId) {
+  if (!queueId) return;
+  let changed = false;
+  state.chat.forEach((entry) => {
+    if (entry.queueId === queueId) {
+      entry.offline = false;
+      delete entry.queueId;
+      delete entry.queuedAt;
+      changed = true;
+    }
+  });
+  if (changed) {
+    persistChatHistory();
+    renderChat();
+  }
+}
+
+// WHAT: detect when fetch failures are caused by missing connectivity.
+// WHY: we only queue prompts on network errors; server-side failures should bubble to reviewers immediately.
+// HOW: check `navigator.onLine` plus common network error substrings before classifying the exception as “offline.”
+function isOfflineError(error) {
+  if (navigator?.onLine === false) {
+    return true;
+  }
+  const message = (error?.message || '').toLowerCase();
+  return ['failed to fetch', 'networkerror', 'offline', 'network request failed'].some((needle) =>
+    message.includes(needle),
+  );
+}
+
+// WHAT: resend queued chat prompts manually or when the browser regains connectivity.
+// WHY: reviewers need a one-click “Retry offline prompts” flow instead of copy/pasting text after outages.
+// HOW: run the queue sequentially, piping each message back through `/api/chat`, clearing entries as they succeed, and halting/resurfacing errors if we go offline again.
+async function retryOfflineChatQueue(options = {}) {
+  const { silent = false } = options;
+  if (!state.offlineChatQueue.length) {
+    if (!silent) {
+      showToast('No offline prompts to resend.', 'info');
+    }
+    return;
+  }
+  if (navigator?.onLine === false) {
+    if (!silent) {
+      showToast('Still offline — prompts remain queued.', 'warning');
+    }
+    return;
+  }
+  state.offlineReplayActive = true;
+  renderOfflineQueueBanner();
+  setChatStatus('Retrying offline prompts…');
+  for (const record of [...state.offlineChatQueue]) {
+    const success = await replayOfflineChatRecord(record, { silent });
+    if (!success) {
+      break;
+    }
+  }
+  state.offlineReplayActive = false;
+  renderOfflineQueueBanner();
+  setChatStatus('Ready');
+}
+
+// WHAT: attempt to replay a single queued prompt.
+// WHY: reuses the same code path for batch retries and future per-message buttons.
+// HOW: set the pending entry (if it still exists), post to `/api/chat`, clear it from the queue, and bubble toast errors when needed.
+async function replayOfflineChatRecord(record, options = {}) {
+  if (!record) return false;
+  const { silent = false } = options;
+  const chatEntry = state.chat.find((entry) => entry.queueId === record.id);
+  state.pendingChatEntry = chatEntry || null;
+  try {
+    const reply = await fetchJSON('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: record.text }),
+    });
+    removeOfflineChatRecord(record.id);
+    markChatEntryDelivered(record.id);
+    appendAssistantReply(reply);
+    if (state.selectedPrompt) {
+      updateRelatedPromptOptions();
+    }
+    await Promise.all([loadPending(true), refreshActiveDataTab()]);
+    return true;
+  } catch (err) {
+    if (!navigator?.onLine) {
+      if (!silent) {
+        showToast('Went offline mid-retry. Prompts stay queued.', 'warning');
+      }
+      return false;
+    }
+    const message = err?.message || 'Failed to resend prompt.';
+    if (!silent) {
+      showToast(message, 'error');
+    }
+    return false;
+  } finally {
+    state.pendingChatEntry = null;
   }
 }
 
@@ -6350,6 +6610,35 @@ function startPolling() {
   }, POLL_INTERVAL_MS);
 }
 
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function initializeAppData(options = {}) {
+  const { force = false } = options;
+  if (state.initialized && !force) {
+    return;
+  }
+  if (!getReviewerToken()) {
+    showToast('Set your reviewer token to load data.', 'warning');
+    state.initialized = false;
+    return;
+  }
+  stopPolling();
+  try {
+    await loadIntents();
+    await Promise.all([loadStats(), loadPending(true), loadClassifier(), loadCorrected(), refreshStores()]);
+    renderLatestConfirmed();
+    startPolling();
+    state.initialized = true;
+  } catch (err) {
+    showToast(err.message || 'Failed to load dashboard data.', 'error');
+  }
+}
+
 function wireEvents() {
   el.chatForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -6376,11 +6665,32 @@ function wireEvents() {
       }
       await Promise.all([loadPending(true), refreshActiveDataTab()]);
     } catch (err) {
-      showToast(err.message || 'Chat failed', 'error');
+      if (isOfflineError(err)) {
+        queueOfflineChatMessage(message, userEntry);
+      } else {
+        showToast(err.message || 'Chat failed', 'error');
+      }
       state.pendingChatEntry = null;
     } finally {
       setChatStatus('Ready');
     }
+  });
+
+  el.offlineQueueRetryBtn?.addEventListener('click', () => {
+    retryOfflineChatQueue();
+  });
+
+  window.addEventListener('online', () => {
+    renderOfflineQueueBanner();
+    if (state.offlineChatQueue.length) {
+      showToast('Back online. Retrying queued prompts…', 'info');
+      retryOfflineChatQueue({ silent: true });
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    renderOfflineQueueBanner();
+    showToast('Offline: prompts will queue until you retry.', 'warning');
   });
 
   el.chatVoiceButton?.addEventListener('click', () => {
@@ -6625,7 +6935,6 @@ function wireEvents() {
 async function bootstrap() {
   restoreDataPanelState();
   ensureReviewerId();
-  ensureReviewerToken();
   disableAutofill();
   detectVoiceSupport();
   registerServiceWorker();
@@ -6634,9 +6943,14 @@ async function bootstrap() {
   setChatStatus('Ready');
   window.scrollTo(0, 0);
   loadStoredChatHistory();
+  loadOfflineChatQueue();
   loadStoredLatestConfirmed();
   loadStoredSelection();
   renderChat();
+  renderOfflineQueueBanner();
+  if (state.offlineChatQueue.length && navigator?.onLine) {
+    retryOfflineChatQueue({ silent: true });
+  }
   renderLatestConfirmed();
   try {
     const storedPage = localStorage.getItem(STORAGE_KEYS.ACTIVE_PAGE);
@@ -6652,10 +6966,12 @@ async function bootstrap() {
   } catch (err) {
     switchPage('front-page');
   }
-  await loadIntents();
-  await Promise.all([loadStats(), loadPending(true), loadClassifier(), loadCorrected(), refreshStores()]);
-  renderLatestConfirmed();
-  startPolling();
+  const hasToken = ensureReviewerToken();
+  if (hasToken) {
+    await initializeAppData({ force: true });
+  } else {
+    state.initialized = false;
+  }
 }
 
 bootstrap().catch((err) => console.error(err));

@@ -94,6 +94,12 @@
             <span class="hint install-hint">On phone: open this URL, tap ⋮ → Add to Home Screen, then use the mic button.</span>
             <span class="badge subtle hidden" id="voice-status"></span>
           </div>
+          <div class="offline-queue hidden" id="offline-queue">
+            <div class="offline-queue-text">
+              <p class="hint">Offline prompts queued: <span id="offline-queue-count">0</span>. They’ll resend when you tap Retry or come back online.</p>
+            </div>
+            <button id="offline-queue-retry" class="button ghost" type="button">Retry offline prompts</button>
+          </div>
         </section>
 
         <!--
