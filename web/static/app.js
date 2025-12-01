@@ -1,392 +1,53 @@
-// Tier-5 dashboard constants and helpers
-// WHAT: Define poll intervals, intent wiring, field layouts, and reusable DOM refs.
-// WHY: Keeps the UI declarative so features (e.g., new tools) are driven by config instead of ad-hoc logic.
-// HOW: Use consistent naming across pending queue, training view, and data tabs.
-const POLL_INTERVAL_MS = 15000;
-const DEFAULT_INTENT_ACTIONS = {
-  todo_list: ['list', 'find', 'create', 'update', 'delete'],
-  kitchen_tips: ['list', 'find', 'create', 'update', 'delete'],
-  calendar_edit: ['list', 'find', 'create', 'update', 'delete'],
-  app_guide: ['list', 'find', 'create', 'update', 'delete'],
-};
-
-const ACTION_ALIASES = {
-  kitchen_tips: { search: 'find', get: 'find' },
-  app_guide: { get: 'find', upsert: 'update', search: 'find' },
-};
-
-const FIELD_ORDER = [
-  'title',
-  'id',
-  'status',
-  'priority',
-  'deadline',
-  'start',
-  'end',
-  'location',
-  'keywords',
-  'link',
-  'city',
-  'time',
-  'topic',
-  'language',
-  'intended_entities',
-  'content',
-];
-
-const DISPLAY_META_FIELDS = ['intent', 'action', 'domain'];
-
-const FIELD_LIBRARY = {
-  title: { label: 'Title' },
-  content: { label: 'Content', type: 'textarea' },
-  status: {
-    label: 'Status',
-    control: () => {
-      const select = document.createElement('select');
-      select.innerHTML = `
-        <option value="pending">Pending</option>
-        <option value="pushed">Pushed</option>
-        <option value="completed">Completed</option>
-      `;
-      return select;
-    },
-  },
-  priority: {
-    label: 'Priority',
-    control: () => {
-      const select = document.createElement('select');
-      select.innerHTML = `
-        <option value="low">Low</option>
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
-      `;
-      return select;
-    },
-  },
-  deadline: { label: 'Deadline' },
-  start: { label: 'Start' },
-  end: { label: 'End' },
-  location: { label: 'Location' },
-  keywords: { label: 'Keywords' },
-  link: { label: 'Link (URL)' },
-  city: { label: 'City' },
-  time: { label: 'Time hint' },
-  topic: { label: 'Topic' },
-  language: { label: 'Language (e.g., en)' },
-  id: { label: 'ID' },
-};
-
-function getFieldLabel(tool, field) {
-  if (tool === 'app_guide' && field === 'title') {
-    return 'Section';
-  }
-  return FIELD_LIBRARY[field]?.label || field;
-}
-
-const TOOL_REQUIRED_FIELDS = {
-  todo_list: ['title'],
-  calendar_edit: ['title'],
-  kitchen_tips: ['title', 'content'],
-  app_guide: ['title', 'content'],
-};
-
-const TOOL_EXTRA_FIELDS = {
-  calendar_edit: ['location', 'content'],
-  todo_list: ['content', 'deadline', 'priority', 'link'],
-  kitchen_tips: ['keywords', 'link'],
-  app_guide: ['keywords', 'link'],
-};
-
-const TITLE_LOOKUP_TOOLS = new Set(['todo_list', 'kitchen_tips', 'calendar_edit', 'app_guide']);
-const INTENDED_ENTITY_TOOLS = new Set(['todo_list', 'kitchen_tips', 'calendar_edit', 'app_guide']);
-const INTENDED_ENTITY_ACTIONS = new Set(['find', 'list']);
-const TITLE_LOOKUP_ACTIONS = new Set(['update', 'delete']);
-const TITLE_SELECT_TOOLS = new Set(['todo_list', 'kitchen_tips', 'calendar_edit', 'app_guide']);
-const TITLE_SELECT_ACTIONS = new Set(['update', 'delete']);
-
-const TOOL_ACTION_FIELD_CONFIG = {
-  kitchen_tips: {
-    list: { fields: [], required: [] },
-    find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'content', 'keywords', 'link'], required: ['title', 'content'] },
-    update: { fields: ['id', 'title', 'content', 'keywords', 'link'], required: ['id'] },
-    delete: { fields: ['id', 'title'], required: ['id'] },
-  },
-  todo_list: {
-    list: { fields: [], required: [] },
-    find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'content', 'status', 'deadline', 'priority', 'link'], required: ['title', 'deadline'] },
-    delete: { fields: ['id', 'title'], required: ['id'] },
-    update: { fields: ['id', 'title', 'content', 'status', 'deadline', 'priority', 'link'], required: ['id'] },
-  },
-  calendar_edit: {
-    list: { fields: [], required: [] },
-    find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'start', 'end', 'location', 'content', 'link'], required: ['title'] },
-    delete: { fields: ['id', 'title'], required: ['id'] },
-    update: { fields: ['id', 'title', 'start', 'end', 'location', 'content', 'link'], required: ['id'] },
-  },
-  app_guide: {
-    list: { fields: [], required: [] },
-    find: { fields: ['keywords'], required: ['keywords'] },
-    create: { fields: ['title', 'content', 'keywords', 'link'], required: ['title', 'content'] },
-    update: { fields: ['id', 'title', 'content', 'keywords', 'link'], required: ['id'] },
-    delete: { fields: ['id', 'title'], required: ['id'] },
-  },
-};
-
-const MUTATING_ACTIONS = new Set(['create', 'update', 'delete']);
-
-const ENTITY_FIELD_CONFIG = {
-  todo_list: {
-    field: 'id',
-    store: 'todos',
-    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
-    hydrate: (entity) => ({
-      id: entity.id,
-      title: entity.title || '',
-      status: entity.status || '',
-      deadline: entity.deadline || '',
-      priority: entity.priority || '',
-      content: Array.isArray(entity.notes) ? entity.notes.join('\n') : entity.notes || '',
-      link: entity.link || '',
-    }),
-  },
-  calendar_edit: {
-    field: 'id',
-    store: 'calendar',
-    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
-    hydrate: (entity) => ({
-      id: entity.id,
-      title: entity.title || '',
-      start: entity.start || '',
-      end: entity.end || '',
-      location: entity.location || '',
-      content: entity.notes || '',
-      link: entity.link || '',
-    }),
-  },
-  kitchen_tips: {
-    field: 'id',
-    store: 'kitchen_tips',
-    label: (entity) => `${entity.title || 'Untitled'} (#${entity.id})`,
-    hydrate: (entity) => ({
-      id: entity.id,
-      title: entity.title || '',
-      content: entity.content || '',
-      keywords: Array.isArray(entity.keywords) ? entity.keywords.join(', ') : '',
-      link: entity.link || '',
-    }),
-  },
-  app_guide: {
-    field: 'id',
-    store: 'app_guide',
-    label: (entity) => `${entity.title || entity.id || 'Untitled'} (#${entity.id})`,
-    hydrate: (entity) => ({
-      id: entity.id || '',
-      title: entity.title || '',
-      content: entity.content || '',
-      keywords: Array.isArray(entity.keywords) ? entity.keywords.join(', ') : '',
-      link: entity.link || '',
-    }),
-  },
-};
-
-const DATE_TIME_FIELD_CONFIG = {
-  time: { mode: 'weather', includeTime: true, defaultTime: '13:00' },
-  start: { mode: 'iso', includeTime: true, defaultTime: '09:00', split: true },
-  end: { mode: 'iso', includeTime: true, defaultTime: '10:00', split: true },
-  deadline: { mode: 'date', includeTime: false },
-};
-
-const CALENDAR_FIELD_LAYOUT = {
-  title: { column: '1', row: '1' },
-  'start-date': { column: '2', row: '1' },
-  'end-date': { column: '3', row: '1' },
-  link: { column: '4', row: '1' },
-  location: { column: '4', row: '2' },
-  'start-time': { column: '2', row: '2' },
-  'end-time': { column: '3', row: '2' },
-  id: { column: '1', row: '2' },
-};
-
-const FIELD_LAYOUTS = {
-  todo_list: {
-    default: {
-      title: { column: '1', row: '1' },
-      id: { column: '2', row: '1' },
-      keywords: { column: '3', row: '1' },
-      deadline: { column: '1', row: '2' },
-      priority: { column: '2', row: '2' },
-      status: { column: '3', row: '2' },
-      link: { column: '4', row: '2' },
-      content: { column: '1 / span 4', row: '3' },
-    },
-    actions: {
-      find: {
-        keywords: { column: '1', row: '1' },
-      },
-      delete: {
-        title: { column: '1', row: '1' },
-        id: { column: '2', row: '1' },
-      },
-      list: {},
-    },
-  },
-  app_guide: {
-    default: {
-      title: { column: '1', row: '1' },
-      id: { column: '2', row: '1' },
-      keywords: { column: '1', row: '2' },
-      link: { column: '2', row: '2' },
-      content: { column: '1 / span 4', row: '3' },
-    },
-    actions: {
-      create: {
-        title: { column: '1', row: '1' },
-        id: { column: '2', row: '1' },
-        keywords: { column: '1', row: '2' },
-        link: { column: '2', row: '2' },
-        content: { column: '1 / span 4', row: '3' },
-      },
-      find: {
-        keywords: { column: '1', row: '1' },
-      },
-      delete: {
-        title: { column: '1', row: '1' },
-        id: { column: '2', row: '1' },
-      },
-      list: {},
-    },
-  },
-  kitchen_tips: {
-    default: {
-      title: { column: '1', row: '1' },
-      id: { column: '2', row: '1' },
-      keywords: { column: '1', row: '2' },
-      link: { column: '2', row: '2' },
-      content: { column: '1 / span 4', row: '3' },
-    },
-    actions: {
-      create: {
-        title: { column: '1', row: '1' },
-        keywords: { column: '1', row: '2' },
-        link: { column: '2', row: '2' },
-        content: { column: '1 / span 4', row: '3' },
-      },
-      find: {
-        keywords: { column: '1', row: '1' },
-      },
-      delete: {
-        title: { column: '1', row: '1' },
-        id: { column: '2', row: '1' },
-      },
-      list: {},
-    },
-  },
-  calendar_edit: {
-    default: {
-      keywords: { column: '1', row: '3' },
-      content: { column: '1 / span 4', row: '4' },
-    },
-    actions: {
-      find: {
-        keywords: { column: '1', row: '1' },
-      },
-      delete: {
-        title: { column: '1', row: '1' },
-        id: { column: '2', row: '1' },
-      },
-      list: {},
-    },
-  },
-};
-
-// WHAT: bootstrap the state slice for a todo CRUD action.
-// WHY: both create/update forms track their own draft values independent of pending corrections.
-// HOW: seed action metadata plus value/display objects.
-function createTodoFormState(action) {
-  return {
-    action,
-    values: {},
-    display: {},
-  };
-}
-
-function createCalendarFormState(action) {
-  return {
-    action,
-    values: {},
-    display: {},
-    datetime: {},
-  };
-}
-
-function createKitchenFormState(action) {
-  return {
-    action,
-    values: {},
-  };
-}
-
-function slugifySectionLabel(text = '') {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function humanizeSectionId(value = '') {
-  return value
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ');
-}
-
-function formatNotesSectionHeading(entry = {}) {
-  const rawId = String(entry.id || '').trim();
-  const rawTitle = String(entry.title || '').trim();
-  const slugLower = rawId.toLowerCase();
-  let displayTitle = rawTitle;
-  if (!displayTitle && rawId) {
-    displayTitle = humanizeSectionId(rawId);
-  } else if (displayTitle && rawId && slugifySectionLabel(displayTitle) === slugLower) {
-    displayTitle = humanizeSectionId(rawId);
-  }
-  if (!displayTitle) {
-    displayTitle = 'Untitled section';
-  }
-  const slugMatchesTitle = rawId && slugifySectionLabel(displayTitle) === slugLower;
-  return {
-    title: displayTitle,
-    slug: slugMatchesTitle ? '' : rawId,
-  };
-}
-
-function getNoteSectionTitles() {
-  const seen = new Set();
-  return (state.dataStores.app_guide || [])
-    .map((entry) => {
-      const heading = formatNotesSectionHeading(entry);
-      const rawTitle = (entry.title || '').trim();
-      const optionValue = rawTitle || heading.title;
-      if (!optionValue) {
-        return null;
-      }
-      const key = optionValue.toLowerCase();
-      if (seen.has(key)) {
-        return null;
-      }
-      seen.add(key);
-      if (heading.title && heading.title !== optionValue) {
-        return { value: optionValue, label: heading.title };
-      }
-      return optionValue;
-    })
-    .filter(Boolean);
-}
+import {
+  ACTION_ALIASES,
+  CALENDAR_FIELD_LAYOUT,
+  DATE_TIME_FIELD_CONFIG,
+  DATA_STORE_IDS,
+  DEFAULT_INTENT_ACTIONS,
+  DISPLAY_META_FIELDS,
+  ENTITY_FIELD_CONFIG,
+  FIELD_LAYOUTS,
+  FIELD_LIBRARY,
+  FIELD_ORDER,
+  getFieldLabel,
+  createTodoFormState,
+  createCalendarFormState,
+  createKitchenFormState,
+  slugifySectionLabel,
+  humanizeSectionId,
+  formatNotesSectionHeading,
+  getNoteSectionTitles,
+  INTENDED_ENTITY_ACTIONS,
+  INTENDED_ENTITY_TOOLS,
+  MUTATING_ACTIONS,
+  SELECTABLE_DATA_STORES,
+  STORAGE_KEYS,
+  TITLE_LOOKUP_ACTIONS,
+  TITLE_LOOKUP_TOOLS,
+  TITLE_SELECT_ACTIONS,
+  TITLE_SELECT_TOOLS,
+  TOOL_ACTION_FIELD_CONFIG,
+  TOOL_EXTRA_FIELDS,
+  TOOL_REQUIRED_FIELDS,
+  state,
+  el,
+  navButtons,
+  PURGE_MAX_AGE_DAYS,
+  TRAINING_ALERT_INCREMENT,
+  VOICE_MIN_DURATION_MS,
+  VOICE_MAX_DURATION_MS,
+  VOICE_MIME_TYPES,
+  POLL_INTERVAL_MS,
+} from './src/shared.js';
+import {
+  formatPreviewValue,
+  formatTimestamp,
+  hideToast,
+  orderPayloadForDisplay,
+  setChatStatus,
+  setVoiceStatus,
+  showToast,
+} from './src/utils.js';
 
 const COMBOBOX_DEFAULT_LIMIT = 8;
 let comboboxIdCounter = 0;
@@ -727,378 +388,8 @@ function disableAutofill() {
   document.querySelectorAll('input, textarea').forEach((field) => field.setAttribute('autocomplete', 'off'));
 }
 
-const STORAGE_KEYS = {
-  ACTIVE_PAGE: 'tier5_active_page',
-  PENDING_PAGE: 'tier5_pending_page',
-  CHAT_HISTORY: 'tier5_chat_history',
-  LATEST_CONFIRMED: 'tier5_latest_confirmed',
-  SELECTED_PROMPT: 'tier5_selected_prompt',
-  REVIEWER_ID: 'tier5_reviewer_id',
-  REVIEWER_TOKEN: 'tier5_reviewer_token',
-  LAST_PURGE_ALERT_SIGNATURE: 'tier5_last_purge_alert_signature',
-  LAST_TRAINING_ALERT_COUNT: 'tier5_last_training_alert_count',
-  DATA_ACTIVE_TAB: 'tier5_data_active_tab',
-  DATA_SELECTED_ROWS: 'tier5_data_selected_rows',
-  VOICE_OFFLINE_LOG: 'tier5_voice_offline_attempts',
-  CHAT_OFFLINE_QUEUE: 'tier5_chat_offline_queue',
-};
 
-let pollTimer;
 
-const DATA_STORE_IDS = ['todos', 'calendar', 'kitchen_tips', 'app_guide'];
-const SELECTABLE_DATA_STORES = new Set(['todos', 'calendar', 'kitchen_tips']);
-const VOICE_MIN_DURATION_MS = 5000;
-const VOICE_MAX_DURATION_MS = 15000;
-const VOICE_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mpeg'];
-
-const state = {
-  chat: [],
-  intents: [],
-  intentActions: {},
-  pending: [],
-  pendingPage: 1,
-  pendingLimit: 25,
-  pendingHasMore: false,
-  selectedPromptId: null,
-  selectedPrompt: null,
-  correctionFields: {},
-  hiddenFields: {},
-  fieldVersions: {},
-  intendedEntities: [],
-  latestConfirmed: null,
-  classifier: [],
-  corrected: [],
-  stats: {},
-  datetimeInputs: {},
-  notesComboboxes: null,
-  pendingChatEntry: null,
-  duplicateConfirmations: {},
-  dataStores: {
-    todos: [],
-    calendar: [],
-    kitchen_tips: [],
-    app_guide: [],
-  },
-  selectedRows: {
-    todos: null,
-    calendar: null,
-    kitchen_tips: null,
-  },
-  todoCrud: {
-    create: createTodoFormState('create'),
-    update: createTodoFormState('update'),
-    activeAction: 'create',
-  },
-  calendarCrud: {
-    create: createCalendarFormState('create'),
-    update: createCalendarFormState('update'),
-    activeAction: 'create',
-  },
-  kitchenCrud: {
-    create: createKitchenFormState('create'),
-    update: createKitchenFormState('update'),
-    activeAction: 'create',
-  },
-  todoSort: { column: 'deadline', direction: 'asc' },
-  calendarSort: { column: 'end', direction: 'desc' },
-  kitchenSort: { column: 'title', direction: 'asc' },
-  activeDataTab: 'todos',
-  reviewerId: '',
-  reviewerToken: '',
-  serviceWorkerReady: false,
-  offlineChatQueue: [],
-  offlineReplayActive: false,
-  voice: {
-    supported: false,
-    mediaRecorder: null,
-    recording: false,
-    chunks: [],
-    mimeType: 'audio/webm',
-    mediaError: null,
-    stopTimer: null,
-    uploading: false,
-    startedAt: null,
-  },
-  notifications: [],
-  initialized: false,
-};
-
-const el = {
-  chatLog: document.querySelector('#chat-log'),
-  chatForm: document.querySelector('#chat-form'),
-  chatInput: document.querySelector('#chat-input'),
-  chatStatus: document.querySelector('#chat-status'),
-  chatVoiceButton: document.querySelector('#chat-voice-button'),
-  voiceStatus: document.querySelector('#voice-status'),
-  offlineQueue: document.querySelector('#offline-queue'),
-  offlineQueueCount: document.querySelector('#offline-queue-count'),
-  offlineQueueRetryBtn: document.querySelector('#offline-queue-retry'),
-  intentSelect: document.querySelector('#intent-select'),
-  actionSelect: document.querySelector('#action-select'),
-  relatedPromptsList: document.querySelector('#related-prompts-list'),
-  relatedPromptsInput: document.querySelector('#related-prompts-input'),
-  relatedPromptsOptions: document.querySelector('#related-prompts-options'),
-  intendedEntitiesRow: document.querySelector('#intended-entities-row'),
-  intendedEntitiesList: document.querySelector('#intended-entities-list'),
-  entitySearchInput: document.querySelector('#entity-search-input'),
-  entitySearchOptions: document.querySelector('#entity-search-options'),
-  dynamicFieldGrid: document.querySelector('#dynamic-field-grid'),
-  pendingList: document.querySelector('#pending-list'),
-  pendingCountInline: document.querySelector('#pending-count-inline'),
-  pendingPrev: document.querySelector('#pending-prev'),
-  pendingNext: document.querySelector('#pending-next'),
-  pendingPageLabel: document.querySelector('#pending-page'),
-  pendingRefresh: document.querySelector('#pending-refresh'),
-  selectedPromptText: document.querySelector('#selected-prompt-text'),
-  selectedReason: document.querySelector('#selected-reason'),
-  versionHistory: document.querySelector('#version-history'),
-  correctButton: document.querySelector('#correct-button'),
-  latestConfirmedTitle: document.querySelector('#latest-confirmed-title'),
-  latestConfirmedMeta: document.querySelector('#latest-confirmed-meta'),
-  latestConfirmedPayload: document.querySelector('#latest-confirmed-payload'),
-  promptSummary: document.querySelector('#prompt-summary'),
-  editorPanel: document.querySelector('#editor-panel'),
-  dataTabs: document.querySelectorAll('.data-tab'),
-  dataPanels: document.querySelectorAll('.data-panel-view'),
-  dataRefresh: document.querySelector('#data-refresh'),
-  todosPanel: document.querySelector('#todos-panel'),
-  todoCrudGrid: document.querySelector('#todo-crud-grid'),
-  todoCrudForm: document.querySelector('#todo-crud-form'),
-  todoCrudSubmit: document.querySelector('#todo-crud-submit'),
-  todoCrudTitle: document.querySelector('#todo-crud-title'),
-  todoCrudReset: document.querySelector('#todo-reset-button'),
-  todoSortButtons: document.querySelectorAll('[data-todo-sort]'),
-  calendarPanel: document.querySelector('#calendar-panel'),
-  calendarSortButtons: document.querySelectorAll('[data-calendar-sort]'),
-  calendarCrudForm: document.querySelector('#calendar-crud-form'),
-  calendarCrudGrid: document.querySelector('#calendar-crud-grid'),
-  calendarCrudSubmit: document.querySelector('#calendar-crud-submit'),
-  calendarCrudTitle: document.querySelector('#calendar-crud-title'),
-  calendarCrudReset: document.querySelector('#calendar-reset-button'),
-  kitchenPanel: document.querySelector('#kitchen-panel'),
-  kitchenCrudForm: document.querySelector('#kitchen-crud-form'),
-  kitchenCrudGrid: document.querySelector('#kitchen-crud-grid'),
-  kitchenCrudSubmit: document.querySelector('#kitchen-crud-submit'),
-  kitchenCrudTitle: document.querySelector('#kitchen-crud-title'),
-  kitchenCrudReset: document.querySelector('#kitchen-reset-button'),
-  kitchenSortButtons: document.querySelectorAll('[data-kitchen-sort]'),
-  guideList: document.querySelector('#guide-list'),
-  guideSectionField: document.querySelector('#guide-section-field'),
-  guideForm: document.querySelector('#guide-form'),
-  classifierTable: document.querySelector('#classifier-table tbody'),
-  classifierRefresh: document.querySelector('#classifier-refresh'),
-  correctedTable: document.querySelector('#corrected-table tbody'),
-  correctedRefresh: document.querySelector('#corrected-refresh'),
-  statsPending: document.querySelector('#pending-count'),
-  statsPendingBreakdown: document.querySelector('#pending-breakdown'),
-  statsLabeled: document.querySelector('#labeled-count'),
-  statsClassifier: document.querySelector('#classifier-count'),
-  exportButton: document.querySelector('#export-prompts'),
-  exportLinks: document.querySelector('#export-links'),
-  importForm: document.querySelector('#import-form'),
-  refreshButton: document.querySelector('#refresh-button'),
-  toast: document.querySelector('#toast'),
-  trainingPage: document.querySelector('#training-page'),
-  reviewerBadge: document.querySelector('#reviewer-id-badge'),
-  reviewerButton: document.querySelector('#set-reviewer-id'),
-  reviewerTokenBadge: document.querySelector('#reviewer-token-badge'),
-  reviewerTokenButton: document.querySelector('#set-reviewer-token'),
-  notificationsList: document.querySelector('#notifications-list'),
-  governancePolicyVersion: document.querySelector('#governance-policy-version'),
-  governanceAllowedTools: document.querySelector('#governance-allowed-tools'),
-  governanceAllowedModels: document.querySelector('#governance-allowed-models'),
-  governanceLastPurge: document.querySelector('#governance-last-purge'),
-  governanceAvgLatency: document.querySelector('#governance-avg-latency'),
-  governanceViolationCount: document.querySelector('#governance-violation-count'),
-  governanceViolationList: document.querySelector('#governance-violation-list'),
-  retentionTableBody: document.querySelector('#retention-table-body'),
-  governanceIntentCounts: document.querySelector('#governance-intent-counts'),
-  governanceEvalIntent: document.querySelector('#governance-eval-intent'),
-  governanceEvalAction: document.querySelector('#governance-eval-action'),
-};
-
-const navButtons = document.querySelectorAll('.nav-link');
-
-if (typeof window !== 'undefined' && window.history && 'scrollRestoration' in window.history) {
-  window.history.scrollRestoration = 'manual';
-}
-
-const REVIEWER_ID_PATTERN = /^[A-Za-z0-9._-]{2,32}$/;
-const PURGE_MAX_AGE_DAYS = 7;
-const TRAINING_ALERT_INCREMENT = 30;
-
-function validateReviewerId(value) {
-  return REVIEWER_ID_PATTERN.test(value || '');
-}
-
-function updateReviewerBadge() {
-  if (el.reviewerBadge) {
-    el.reviewerBadge.textContent = state.reviewerId || 'anonymous';
-  }
-}
-
-function setReviewerId(newId) {
-  state.reviewerId = newId || '';
-  updateReviewerBadge();
-  try {
-    if (state.reviewerId) {
-      localStorage.setItem(STORAGE_KEYS.REVIEWER_ID, state.reviewerId);
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.REVIEWER_ID);
-    }
-  } catch (err) {
-    // ignore storage failures
-  }
-}
-
-function restoreReviewerId() {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_ID);
-    if (stored && validateReviewerId(stored)) {
-      state.reviewerId = stored;
-    } else if (stored) {
-      localStorage.removeItem(STORAGE_KEYS.REVIEWER_ID);
-    }
-  } catch (err) {
-    // ignore
-  }
-  updateReviewerBadge();
-}
-
-function promptForReviewerId() {
-  const existing = state.reviewerId;
-  const input = window.prompt(
-    'Enter your reviewer ID (letters/numbers, 2-32 chars).',
-    existing || '',
-  );
-  if (input === null) {
-    return false;
-  }
-  const normalized = (input || '').trim();
-  if (!validateReviewerId(normalized)) {
-    showToast('Reviewer ID must be 2-32 characters (letters, numbers, . _ -).', 'error');
-    return false;
-  }
-  setReviewerId(normalized);
-  showToast(`Reviewer set to ${normalized}`, 'success');
-  return true;
-}
-
-function ensureReviewerId() {
-  restoreReviewerId();
-  if (!state.reviewerId) {
-    const accepted = promptForReviewerId();
-    if (!accepted) {
-      showToast('Using anonymous reviewer ID until you set one.', 'warning');
-    }
-  }
-}
-
-function getReviewerId() {
-  if (state.reviewerId) {
-    return state.reviewerId;
-  }
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_ID);
-    if (stored && validateReviewerId(stored)) {
-      state.reviewerId = stored;
-      updateReviewerBadge();
-      return state.reviewerId;
-    }
-  } catch (err) {
-    // ignore
-  }
-  return '';
-}
-
-function updateReviewerTokenBadge() {
-  if (!el.reviewerTokenBadge) return;
-  if (state.reviewerToken) {
-    el.reviewerTokenBadge.textContent = 'Token set';
-    el.reviewerTokenBadge.classList.remove('warning');
-  } else {
-    el.reviewerTokenBadge.textContent = 'Token missing';
-    el.reviewerTokenBadge.classList.add('warning');
-  }
-}
-
-function setReviewerToken(value) {
-  state.reviewerToken = value || '';
-  updateReviewerTokenBadge();
-  try {
-    if (state.reviewerToken) {
-      localStorage.setItem(STORAGE_KEYS.REVIEWER_TOKEN, state.reviewerToken);
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.REVIEWER_TOKEN);
-      state.initialized = false;
-      stopPolling();
-    }
-  } catch (err) {
-    // ignore storage issues
-  }
-}
-
-function restoreReviewerToken() {
-  let restored = false;
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_TOKEN);
-    if (stored) {
-      state.reviewerToken = stored;
-      restored = true;
-    } else {
-      state.reviewerToken = '';
-    }
-  } catch (err) {
-    // ignore
-  }
-  updateReviewerTokenBadge();
-  return restored;
-}
-
-function promptForReviewerToken() {
-  const input = window.prompt('Enter the reviewer token (leave blank to clear).', '');
-  if (input === null) {
-    return false;
-  }
-  const normalized = (input || '').trim();
-  setReviewerToken(normalized);
-  if (normalized) {
-    showToast('Reviewer token saved.', 'success');
-    initializeAppData({ force: true });
-    return true;
-  }
-  showToast('Reviewer token cleared. API calls will fail until you set one.', 'warning');
-  state.initialized = false;
-  return false;
-}
-
-function ensureReviewerToken() {
-  const restored = restoreReviewerToken();
-  if (!state.reviewerToken) {
-    if (!restored) {
-      showToast('Set your reviewer token with the Token button to use the API.', 'warning');
-    }
-    return false;
-  }
-  return true;
-}
-
-function getReviewerToken() {
-  if (state.reviewerToken) {
-    return state.reviewerToken;
-  }
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.REVIEWER_TOKEN);
-    if (stored) {
-      state.reviewerToken = stored;
-      updateReviewerTokenBadge();
-      return state.reviewerToken;
-    }
-  } catch (err) {
-    // ignore
-  }
-  return '';
-}
 
 function persistActiveDataTab() {
   try {
@@ -1182,13 +473,9 @@ function restoreDataPanelState() {
 
 function buildReviewerHeaders(base = {}) {
   const headers = { ...(base || {}) };
-  const reviewerId = getReviewerId();
-  const reviewerToken = getReviewerToken();
+  const reviewerId = state.user?.username;
   if (reviewerId && !headers['X-Reviewer-ID']) {
     headers['X-Reviewer-ID'] = reviewerId;
-  }
-  if (reviewerToken && !headers['X-Reviewer-Token']) {
-    headers['X-Reviewer-Token'] = reviewerToken;
   }
   return headers;
 }
@@ -1203,6 +490,7 @@ async function fetchJSON(url, options = {}) {
   });
   const response = await fetch(url, {
     headers,
+    credentials: 'include',
     ...options,
   });
   if (response.ok) {
@@ -1219,45 +507,235 @@ async function fetchJSON(url, options = {}) {
       payload?.detail?.message ||
       payload?.detail ||
       payload?.message ||
+      payload?.error ||
       (typeof payload === 'string' ? payload : JSON.stringify(payload));
   } catch (err) {
-    // ignore
+    // ignore parse errors
+  }
+  if (response.status === 401) {
+    handleAuthenticationFailure(detail || 'Authentication required.');
   }
   throw new Error(detail || 'Request failed');
 }
 
-// WHAT: display a temporary toast notification.
-// WHY: reviewers need quick confirmation/error messages when mutating state.
-// HOW: writes the message/type into `#toast`, shows it, then hides it after 3 s so reviewers see feedback without extra clicks.
-function showToast(message, type = 'info') {
-  if (!el.toast) return;
-  el.toast.textContent = message;
-  el.toast.classList.remove('hidden');
-  el.toast.dataset.type = type;
-  setTimeout(() => {
-    el.toast?.classList.add('hidden');
-  }, 3000);
+function isAdminUser() {
+  return Array.isArray(state.user?.roles) && state.user.roles.includes('admin');
 }
 
-// WHAT: update the chat footer with the latest status message.
-// WHY: gives operators feedback when the chatbot is running or idle.
-// HOW: whenever chat submission or polling starts/ends we update `#chat-status` so the footer mirrors backend activity.
-function setChatStatus(text) {
-  if (el.chatStatus) {
-    el.chatStatus.textContent = text;
+function handleAuthenticationFailure(message) {
+  clearAuthenticatedUser();
+  state.initialized = false;
+  stopPolling();
+  showLoginModal(message || 'Please log in.');
+}
+
+function showLoginModal(message) {
+  state.loginVisible = true;
+  if (el.loginModal) {
+    el.loginModal.classList.add('show');
+    el.loginModal.classList.remove('hidden');
+  }
+  if (el.loginError) {
+    if (message) {
+      el.loginError.textContent = message;
+      el.loginError.classList.remove('hidden');
+    } else {
+      el.loginError.classList.add('hidden');
+      el.loginError.textContent = '';
+    }
+  }
+  if (el.loginPassword) {
+    el.loginPassword.value = '';
   }
 }
 
-function setVoiceStatus(text, tone = 'info') {
-  if (!el.voiceStatus) return;
-  if (!text) {
-    el.voiceStatus.classList.add('hidden');
-    el.voiceStatus.removeAttribute('data-tone');
+function hideLoginModal() {
+  state.loginVisible = false;
+  if (el.loginModal) {
+    el.loginModal.classList.remove('show');
+    el.loginModal.classList.add('hidden');
+  }
+  if (el.loginError) {
+    el.loginError.classList.add('hidden');
+  }
+}
+
+function setAuthenticatedUser(payload) {
+  state.user = payload || null;
+  state.loginError = '';
+  renderAuthUI();
+  return state.user;
+}
+
+function clearAuthenticatedUser() {
+  state.user = null;
+  state.adminShowOnlyMine = false;
+  renderAuthUI();
+}
+
+function renderAuthUI() {
+  if (el.authStatusBadge) {
+    if (state.user) {
+      const roles = Array.isArray(state.user.roles) ? state.user.roles.join(', ') : '';
+      const label = roles ? `${state.user.username} (${roles})` : state.user.username;
+      el.authStatusBadge.textContent = label;
+    } else {
+      el.authStatusBadge.textContent = 'Not logged in';
+    }
+  }
+  if (el.authUsage) {
+    const usage = state.user?.usage;
+    if (state.user && usage && usage.limit && !isAdminUser()) {
+      const used = usage.used ?? 0;
+      const left = Math.max((usage.limit ?? 0) - used, 0);
+      el.authUsage.textContent = `Remaining: ${left}/${usage.limit}`;
+      el.authUsage.classList.remove('hidden');
+    } else {
+      el.authUsage.textContent = '';
+      el.authUsage.classList.add('hidden');
+    }
+  }
+  if (el.showLoginButton) {
+    if (state.user) {
+      el.showLoginButton.classList.add('hidden');
+    } else {
+      el.showLoginButton.classList.remove('hidden');
+    }
+  }
+  if (el.logoutButton) {
+    if (state.user) {
+      el.logoutButton.classList.remove('hidden');
+    } else {
+      el.logoutButton.classList.add('hidden');
+    }
+  }
+  updateScopeButtons();
+}
+
+function updateScopeButtons() {
+  const admin = isAdminUser();
+  if (el.pendingScopeToggle) {
+    if (!admin) {
+      el.pendingScopeToggle.classList.add('hidden');
+      if (el.pendingScopeBadge) {
+        el.pendingScopeBadge.classList.add('hidden');
+      }
+    } else {
+      el.pendingScopeToggle.classList.remove('hidden');
+      el.pendingScopeToggle.textContent = state.adminShowOnlyMine ? 'Show all entries' : 'Show only my entries';
+      if (el.pendingScopeBadge) {
+        el.pendingScopeBadge.textContent = state.adminShowOnlyMine ? 'Viewing your entries' : 'Viewing all reviewers';
+        el.pendingScopeBadge.classList.remove('hidden');
+      }
+    }
+  }
+  if (el.dataScopeToggle) {
+    if (!admin) {
+      el.dataScopeToggle.classList.add('hidden');
+      if (el.dataScopeBadge) {
+        el.dataScopeBadge.classList.add('hidden');
+      }
+    } else {
+      el.dataScopeToggle.classList.remove('hidden');
+      el.dataScopeToggle.textContent = state.adminShowOnlyMine ? 'Show all entries' : 'Show only my entries';
+      if (el.dataScopeBadge) {
+        el.dataScopeBadge.textContent = state.adminShowOnlyMine ? 'Viewing your entries' : 'Viewing all reviewers';
+        el.dataScopeBadge.classList.remove('hidden');
+      }
+    }
+  }
+}
+
+function toggleAdminScope() {
+  state.adminShowOnlyMine = !state.adminShowOnlyMine;
+  renderPendingList();
+  renderStats();
+  renderAllDataPanels();
+  updateScopeButtons();
+}
+
+function purgeSensitiveState() {
+  state.pending = [];
+  state.classifier = [];
+  state.corrected = [];
+  state.stats = {};
+  state.chat = [];
+  state.dataStores = {
+    todos: [],
+    calendar: [],
+    kitchen_tips: [],
+    app_guide: [],
+  };
+  state.latestConfirmed = null;
+  renderChat();
+  renderPendingList();
+  renderStats();
+  renderCorrectedTable();
+  renderAllDataPanels();
+}
+
+function renderAllDataPanels() {
+  renderTodos();
+  renderCalendar();
+  renderKitchen();
+  renderNotes();
+}
+
+async function submitLogin(event) {
+  if (event) {
+    event.preventDefault();
+  }
+  if (!el.loginUsername) return;
+  const username = (el.loginUsername.value || '').trim();
+  const password = el.loginPassword?.value || '';
+  if (!username) {
+    if (el.loginError) {
+      el.loginError.textContent = 'Username is required.';
+      el.loginError.classList.remove('hidden');
+    }
     return;
   }
-  el.voiceStatus.textContent = text;
-  el.voiceStatus.dataset.tone = tone;
-  el.voiceStatus.classList.remove('hidden');
+  try {
+    const payload = await fetchJSON('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    setAuthenticatedUser(payload);
+    hideLoginModal();
+    await initializeAppData({ force: true });
+  } catch (err) {
+    if (el.loginError) {
+      el.loginError.textContent = err?.message || 'Login failed';
+      el.loginError.classList.remove('hidden');
+    }
+  }
+}
+
+async function performLogout() {
+  try {
+    await fetchJSON('/api/logout', { method: 'POST' });
+  } catch (err) {
+    console.warn('Logout failed', err);
+  }
+  clearAuthenticatedUser();
+  state.initialized = false;
+  stopPolling();
+  purgeSensitiveState();
+  showLoginModal('Logged out. Please sign in again.');
+}
+
+async function ensureAuthenticated() {
+  if (state.user) {
+    return state.user;
+  }
+  try {
+    const payload = await fetchJSON('/api/me');
+    return setAuthenticatedUser(payload);
+  } catch (err) {
+    state.user = null;
+    state.initialized = false;
+    throw err;
+  }
 }
 
 function updateVoiceButtonState() {
@@ -1721,37 +1199,6 @@ function renderChat() {
     el.chatLog.appendChild(wrapper);
   });
   el.chatLog.scrollTop = el.chatLog.scrollHeight;
-}
-
-// WHAT: stringify parser payload values for short previews.
-// WHY: pending cards show only the first few key/value pairs as inline text.
-// HOW: before pending cards render inline payload summaries we stringify arrays/objects, trim strings, and fallback to “—” for empty values.
-function formatPreviewValue(value) {
-  if (Array.isArray(value)) {
-    return value.join(', ');
-  }
-  if (typeof value === 'object' && value !== null) {
-    return '[object]';
-  }
-  return String(value ?? '');
-}
-
-// WHAT: convert ISO timestamps into localized display text.
-// WHY: pending/meta sections show human-readable timestamps (Created at ...).
-// HOW: convert parser timestamps into `Date` objects, guard invalid values, and format via `toLocaleString` before printing in metadata rows.
-function formatTimestamp(ts) {
-  if (!ts) return null;
-  const date = new Date(ts);
-  if (Number.isNaN(date.valueOf())) {
-    return null;
-  }
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 // WHAT: create the combined metadata string shown beneath each pending card.
@@ -2295,31 +1742,6 @@ function getVersionCount(promptId) {
 // HOW: lookup the friendly label (e.g., “Todo tool”) from `INTENT_LABELS` so pills/headings display a reviewer-friendly name even if the raw intent is technical.
 function formatIntentLabel(intent) {
   return INTENT_LABELS[intent] || intent || 'nlu_fallback';
-}
-
-// WHAT: reorder payload keys for display purposes.
-// WHY: ensures intent/action/domain appear first when rendering payload JSON.
-// HOW: build a shallow copy, emit the meta fields first, then append remaining keys alphabetically so JSON previews in Pending/Training remain readable.
-function orderPayloadForDisplay(payload) {
-  if (!payload || typeof payload !== 'object') {
-    return payload || {};
-  }
-  const ordered = {};
-  DISPLAY_META_FIELDS.forEach((field) => {
-    if (field in payload) {
-      ordered[field] = payload[field];
-    }
-  });
-  const orderedKeys = new Set([...DISPLAY_META_FIELDS]);
-  const restKeys = Object.keys(payload).filter((key) => !orderedKeys.has(key));
-  const keyOrder = [...FIELD_ORDER, ...restKeys.sort()];
-  keyOrder.forEach((key) => {
-    if (key in payload && !orderedKeys.has(key)) {
-      ordered[key] = payload[key];
-      orderedKeys.add(key);
-    }
-  });
-  return ordered;
 }
 
 // WHAT: build dropdown options from the cached store data for a tool.
@@ -3296,12 +2718,24 @@ function attachEditorPanel(slot) {
   el.editorPanel.classList.remove('hidden');
 }
 
+function getDisplayedPendingItems() {
+  if (!isAdminUser() || !state.adminShowOnlyMine) {
+    return state.pending;
+  }
+  const username = state.user?.username;
+  return state.pending.filter((item) => {
+    const owner = item.user_id || item.reviewer_id;
+    return owner === username;
+  });
+}
+
 function renderPendingList() {
   if (!el.pendingList) return;
   const previousScroll = el.pendingList.scrollTop || 0;
   el.pendingList.innerHTML = '';
   detachEditorPanel();
-  state.pending.forEach((item) => {
+  const pendingItems = getDisplayedPendingItems();
+  pendingItems.forEach((item) => {
     const li = document.createElement('li');
     li.className = 'pending-item';
     const header = document.createElement('div');
@@ -4506,6 +3940,192 @@ function renderStats() {
   updateNotifications();
 }
 
+function formatVoiceMinutes(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return '0';
+  }
+  return parsed.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function renderVoiceInbox() {
+  if (el.voiceTableEmpty) {
+    el.voiceTableEmpty.classList.toggle('hidden', Boolean(state.voiceInbox.entries.length));
+  }
+  if (!el.voiceInboxTable) {
+    return;
+  }
+  el.voiceInboxTable.innerHTML = '';
+  state.voiceInbox.entries.forEach((entry) => {
+    const row = document.createElement('tr');
+
+    const timestampCell = document.createElement('td');
+    const formatted = formatTimestamp(entry.timestamp) || entry.timestamp || '—';
+    timestampCell.textContent = formatted;
+    if (entry.id) {
+      const idHint = document.createElement('p');
+      idHint.className = 'hint subtle';
+      idHint.textContent = entry.id;
+      timestampCell.appendChild(idHint);
+    }
+
+    const statusCell = document.createElement('td');
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'badge subtle';
+    statusBadge.textContent = entry.status || 'unknown';
+    statusCell.appendChild(statusBadge);
+
+    const transcriptCell = document.createElement('td');
+    const transcriptText = document.createElement('p');
+    transcriptText.className = 'voice-transcript';
+    transcriptText.textContent = entry.transcribed_text || '—';
+    transcriptCell.appendChild(transcriptText);
+    if (entry.audio_path) {
+      const audioHint = document.createElement('p');
+      audioHint.className = 'hint subtle';
+      audioHint.textContent = entry.audio_path;
+      transcriptCell.appendChild(audioHint);
+    }
+
+    const minutesCell = document.createElement('td');
+    minutesCell.textContent = formatVoiceMinutes(entry.voice_minutes);
+
+    const actionsCell = document.createElement('td');
+    const rerunButton = document.createElement('button');
+    rerunButton.type = 'button';
+    rerunButton.className = 'button ghost';
+    rerunButton.textContent = 'Re-run';
+    rerunButton.disabled = !entry.transcribed_text;
+    rerunButton.addEventListener('click', () => handleVoiceRerun(entry, rerunButton));
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'button ghost';
+    deleteButton.textContent = 'Delete';
+    deleteButton.addEventListener('click', () => handleVoiceDelete(entry, deleteButton));
+    actionsCell.appendChild(rerunButton);
+    actionsCell.appendChild(deleteButton);
+
+    row.appendChild(timestampCell);
+    row.appendChild(statusCell);
+    row.appendChild(transcriptCell);
+    row.appendChild(minutesCell);
+    row.appendChild(actionsCell);
+    el.voiceInboxTable.appendChild(row);
+  });
+
+  if (el.voicePageLabel) {
+    el.voicePageLabel.textContent = String(state.voiceInbox.page);
+  }
+  if (el.voicePrev) {
+    el.voicePrev.disabled = state.voiceInbox.page <= 1;
+  }
+  if (el.voiceNext) {
+    el.voiceNext.disabled = !state.voiceInbox.hasMore;
+  }
+  if (el.voiceMinutesTotal) {
+    el.voiceMinutesTotal.textContent = formatVoiceMinutes(state.voiceInbox.voiceMinutesTotal);
+  }
+  if (el.voiceMinutesToday) {
+    el.voiceMinutesToday.textContent = formatVoiceMinutes(state.voiceInbox.voiceMinutesToday);
+  }
+  if (el.voiceMinutesBudget) {
+    el.voiceMinutesBudget.textContent = formatVoiceMinutes(state.voiceInbox.voiceMinutesBudget);
+  }
+  if (el.voiceMinutesRemaining) {
+    el.voiceMinutesRemaining.textContent = formatVoiceMinutes(state.voiceInbox.voiceMinutesRemaining);
+  }
+  if (el.voiceMaxEntriesHint) {
+    const total = state.voiceInbox.totalEntries || 0;
+    const maxEntries = state.voiceInbox.maxEntries || 0;
+    el.voiceMaxEntriesHint.textContent = maxEntries
+      ? `Showing ${total} of ${maxEntries} retained clips.`
+      : `Showing ${total} clips.`;
+  }
+}
+
+async function loadVoiceInbox(options = {}) {
+  const { resetPage = false, suppressErrors = false } = options;
+  if (resetPage) {
+    state.voiceInbox.page = 1;
+  }
+  const params = new URLSearchParams({
+    page: String(state.voiceInbox.page),
+    limit: String(state.voiceInbox.limit),
+  });
+  try {
+    const data = await fetchJSON(`/api/voice_inbox?${params}`);
+    state.voiceInbox.entries = Array.isArray(data?.items) ? data.items : [];
+    state.voiceInbox.hasMore = Boolean(data?.has_more);
+    state.voiceInbox.totalEntries = data?.total_entries ?? state.voiceInbox.totalEntries;
+    state.voiceInbox.voiceMinutesTotal = data?.voice_minutes_total ?? 0;
+    state.voiceInbox.voiceMinutesToday = data?.voice_minutes_today ?? 0;
+    state.voiceInbox.voiceMinutesBudget = data?.voice_minutes_budget ?? 0;
+    state.voiceInbox.voiceMinutesRemaining = data?.voice_minutes_remaining ?? 0;
+    state.voiceInbox.maxEntries = data?.max_entries ?? 0;
+  } catch (err) {
+    if (!suppressErrors) {
+      showToast(err.message || 'Failed to load voice inbox', 'error');
+    }
+  } finally {
+    renderVoiceInbox();
+  }
+}
+
+function changeVoiceInboxPage(delta) {
+  const nextPage = Math.max(1, state.voiceInbox.page + delta);
+  if (nextPage === state.voiceInbox.page) {
+    return;
+  }
+  if (delta > 0 && !state.voiceInbox.hasMore) {
+    return;
+  }
+  state.voiceInbox.page = nextPage;
+  loadVoiceInbox();
+}
+
+async function handleVoiceRerun(entry, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  try {
+    const payload = await fetchJSON('/api/voice_inbox/rerun', {
+      method: 'POST',
+      body: JSON.stringify({ entry_id: entry.id }),
+    });
+    if (payload.chat) {
+      appendAssistantReply(payload.chat);
+      showToast('Voice clip rerun posted', 'success');
+    }
+    await Promise.all([loadPending(true), refreshActiveDataTab(), loadVoiceInbox()]);
+  } catch (err) {
+    showToast(err.message || 'Voice rerun failed', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
+async function handleVoiceDelete(entry, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  try {
+    await fetchJSON('/api/voice_inbox/delete', {
+      method: 'POST',
+      body: JSON.stringify({ entry_id: entry.id }),
+    });
+    showToast('Voice clip deleted', 'success');
+    await loadVoiceInbox();
+  } catch (err) {
+    showToast(err.message || 'Voice delete failed', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
 function renderGovernanceStats() {
   const stats = state.stats || {};
   if (el.governancePolicyVersion) {
@@ -5158,10 +4778,21 @@ function renderCalendarSortIndicators() {
 // WHAT: populate the Todos data panel with current store entries.
 // WHY: reviewers need quick visibility into persisted todos for context and manual QA.
 // HOW: sort cached store items, build list rows with key metadata, and inject into the DOM.
+function getStoreEntries(store) {
+  const entries = state.dataStores[store] || [];
+  if (!isAdminUser() || !state.adminShowOnlyMine) {
+    return entries;
+  }
+  const username = state.user?.username;
+  return entries.filter((item) => {
+    const owner = item.user_id || item.reviewer_id;
+    return owner === username;
+  });
+}
 function renderTodos() {
   if (!el.todosPanel) return;
   el.todosPanel.innerHTML = '';
-  const rows = sortTodosByState(state.dataStores.todos);
+  const rows = sortTodosByState(getStoreEntries('todos'));
   const selectedTodoId = getSelectedDataRow('todos');
   const highlightActive = getActiveTodoAction() === 'update' && selectedTodoId;
   rows.forEach((todo) => {
@@ -5224,7 +4855,7 @@ function applyTodoSelectionFromState() {
     }
     return;
   }
-  const match = (state.dataStores.todos || []).find(
+  const match = getStoreEntries('todos').find(
     (todo) => String(todo.id) === String(selectedId),
   );
   if (!match) {
@@ -5533,7 +5164,7 @@ function applyKitchenSelectionFromState() {
     }
     return;
   }
-  const match = (state.dataStores.kitchen_tips || []).find(
+  const match = getStoreEntries('kitchen_tips').find(
     (tip) => String(tip.id) === String(selectedId),
   );
   if (!match) {
@@ -6045,7 +5676,7 @@ async function handleCalendarFormSubmit(action) {
 function renderCalendar() {
   if (!el.calendarPanel) return;
   el.calendarPanel.innerHTML = '';
-  const rows = sortCalendarEvents(state.dataStores.calendar);
+  const rows = sortCalendarEvents(getStoreEntries('calendar'));
   const selectedCalendarId = getSelectedDataRow('calendar');
   const highlightActive = getActiveCalendarAction() === 'update' && selectedCalendarId;
   rows.forEach((event) => {
@@ -6109,7 +5740,7 @@ function applyCalendarSelectionFromState() {
     }
     return;
   }
-  const match = (state.dataStores.calendar || []).find(
+  const match = getStoreEntries('calendar').find(
     (event) => String(event.id) === String(selectedId),
   );
   if (!match) {
@@ -6130,7 +5761,7 @@ function applyCalendarSelectionFromState() {
 function renderKitchen() {
   if (!el.kitchenPanel) return;
   el.kitchenPanel.innerHTML = '';
-  const rows = sortKitchenTips(state.dataStores.kitchen_tips);
+  const rows = sortKitchenTips(getStoreEntries('kitchen_tips'));
   const selectedKitchenId = getSelectedDataRow('kitchen_tips');
   const highlightActive = getActiveKitchenAction() === 'update' && selectedKitchenId;
   rows.forEach((tip) => {
@@ -6218,7 +5849,7 @@ function renderKitchen() {
 function renderNotes() {
   if (!el.guideList) return;
   el.guideList.innerHTML = '';
-  const entries = state.dataStores.app_guide || [];
+  const entries = getStoreEntries('app_guide');
   entries.forEach((entry) => {
     const wrapper = document.createElement('li');
     wrapper.className = 'notes-section';
@@ -6607,6 +6238,7 @@ function startPolling() {
   pollTimer = setInterval(() => {
     loadPending(true);
     refreshActiveDataTab();
+    loadVoiceInbox({ suppressErrors: true }).catch(() => {});
   }, POLL_INTERVAL_MS);
 }
 
@@ -6622,20 +6254,28 @@ async function initializeAppData(options = {}) {
   if (state.initialized && !force) {
     return;
   }
-  if (!getReviewerToken()) {
-    showToast('Set your reviewer token to load data.', 'warning');
-    state.initialized = false;
-    return;
-  }
   stopPolling();
   try {
+    await ensureAuthenticated();
     await loadIntents();
-    await Promise.all([loadStats(), loadPending(true), loadClassifier(), loadCorrected(), refreshStores()]);
+    await Promise.all([
+      loadStats(),
+      loadPending(true),
+      loadClassifier(),
+      loadCorrected(),
+      refreshStores(),
+      loadVoiceInbox(),
+    ]);
     renderLatestConfirmed();
     startPolling();
     state.initialized = true;
   } catch (err) {
-    showToast(err.message || 'Failed to load dashboard data.', 'error');
+    if (!state.loginVisible) {
+      showLoginModal(err?.message || 'Sign in to load dashboard data.');
+    }
+    if (!(err?.message || '').toLowerCase().includes('authentication')) {
+      showToast(err?.message || 'Failed to load dashboard data.', 'error');
+    }
   }
 }
 
@@ -6679,6 +6319,8 @@ function wireEvents() {
   el.offlineQueueRetryBtn?.addEventListener('click', () => {
     retryOfflineChatQueue();
   });
+
+  el.toastClose?.addEventListener('click', hideToast);
 
   window.addEventListener('online', () => {
     renderOfflineQueueBanner();
@@ -6743,15 +6385,25 @@ function wireEvents() {
   el.classifierRefresh?.addEventListener('click', loadClassifier);
   el.correctedRefresh?.addEventListener('click', loadCorrected);
   el.refreshButton?.addEventListener('click', () =>
-    Promise.all([loadStats(), loadPending(true), loadClassifier(), loadCorrected(), refreshStores()]),
+    Promise.all([
+      loadStats(),
+      loadPending(true),
+      loadClassifier(),
+      loadCorrected(),
+      refreshStores(),
+      loadVoiceInbox(),
+    ]),
   );
-  el.reviewerButton?.addEventListener('click', () => {
-    promptForReviewerId();
-  });
-  el.reviewerTokenButton?.addEventListener('click', () => {
-    promptForReviewerToken();
-  });
+  el.showLoginButton?.addEventListener('click', () => showLoginModal());
+  el.logoutButton?.addEventListener('click', () => performLogout());
+  el.loginForm?.addEventListener('submit', submitLogin);
+  el.loginCancel?.addEventListener('click', hideLoginModal);
+  el.pendingScopeToggle?.addEventListener('click', () => toggleAdminScope());
+  el.dataScopeToggle?.addEventListener('click', () => toggleAdminScope());
   el.dataRefresh?.addEventListener('click', () => refreshStores([state.activeDataTab]));
+  el.voiceRefresh?.addEventListener('click', () => loadVoiceInbox({ resetPage: true }));
+  el.voicePrev?.addEventListener('click', () => changeVoiceInboxPage(-1));
+  el.voiceNext?.addEventListener('click', () => changeVoiceInboxPage(1));
 
   el.todoCrudForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -6934,11 +6586,11 @@ function wireEvents() {
 // HOW: wire events, restore stored UI state, fetch intents/stats/pending items, and start the auto-refresh interval.
 async function bootstrap() {
   restoreDataPanelState();
-  ensureReviewerId();
   disableAutofill();
   detectVoiceSupport();
   registerServiceWorker();
   wireEvents();
+  renderAuthUI();
   setActiveDataTab(state.activeDataTab, { force: true, skipRefresh: true, persist: false });
   setChatStatus('Ready');
   window.scrollTo(0, 0);
@@ -6966,11 +6618,13 @@ async function bootstrap() {
   } catch (err) {
     switchPage('front-page');
   }
-  const hasToken = ensureReviewerToken();
-  if (hasToken) {
+  try {
+    await ensureAuthenticated();
+    hideLoginModal();
     await initializeAppData({ force: true });
-  } else {
+  } catch (err) {
     state.initialized = false;
+    showLoginModal('Sign in to load reviewer data.');
   }
 }
 

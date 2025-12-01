@@ -1,11 +1,4 @@
 # Tier 7 Deployment (Fly.io)
-
-## Prerequisites
-- Fly CLI installed locally (`brew install flyctl`).
-- Fly account and logged in via `fly auth login`.
-- OpenAI key with `/v1/responses` write access for Whisper.
-- Reviewer token string (store safely; acts as single-user auth secret).
-
 ## Configuration
 1. Update `fly.toml` `app` value to your Fly application name.
 2. Set required secrets:
@@ -15,6 +8,8 @@
 3. Optional tweaks via secrets/env vars:
    - `SPEECH_TO_TEXT_MODEL` (defaults to `gpt-4o-mini-transcribe`).
    - `WEB_UI_PORT` if you change the container port.
+   - `VOICE_INBOX_MAX_ENTRIES` to cap how many stored voice clips stay in `data_pipeline/voice_inbox.json` (default `500`).
+   - `VOICE_DAILY_MINUTES` to limit the Whisper billing budget per day (default `60` minutes).
 
 ## Deploy
 ```bash
@@ -33,3 +28,4 @@ This builds the Docker image (using `Dockerfile` + `requirements.txt`) and runs 
 - Service worker intentionally avoids caching `/api/speech` uploads; offline attempts are logged in `localStorage` for later replay.
 - Reviewer token is required for every `/api/*` route except `/api/health` and `/`.
 - Voice uploads are stored on-disk under `/app/data_pipeline/voice_uploads/` per instance; add a retention job later if storage becomes tight.
+- `/api/voice_inbox` now surfaces stored clips with replay/rerun/delete actions, and `/api/stats` reports `voice_stats` so you can watch minute budgets each day.

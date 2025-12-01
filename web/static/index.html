@@ -20,25 +20,17 @@
           <h1>Taskmaster</h1>
         </div>
         <div class="header-actions">
-          <div class="header-card reviewer-card">
+          <div class="header-card auth-card">
             <div class="header-card-controls">
-              <span class="badge" id="reviewer-id-badge">anonymous</span>
-              <button id="set-reviewer-id" class="button ghost" type="button">Change</button>
+              <span class="badge" id="auth-status-badge">Not logged in</span>
+              <button id="show-login" class="button ghost" type="button">Login</button>
+              <button id="logout-button" class="button ghost hidden" type="button">Logout</button>
             </div>
+            <div class="auth-usage" id="auth-usage"></div>
           </div>
-          <div class="header-card reviewer-card">
-            <div class="header-card-controls">
-              <span class="badge warning" id="reviewer-token-badge">Token missing</span>
-              <button id="set-reviewer-token" class="button ghost" type="button">Token</button>
-            </div>
-          </div>
-          <div class="header-card">
+          <div class="header-card header-card-actions">
             <div class="header-card-controls">
               <button id="refresh-button" class="button secondary" type="button">Refresh Data</button>
-            </div>
-          </div>
-          <div class="header-card">
-            <div class="header-card-controls">
               <a class="button secondary" href="/exports" target="_blank" rel="noreferrer">Open Exports</a>
             </div>
           </div>
@@ -71,6 +63,28 @@
             <li class="notification-empty">No pending CLI actions.</li>
           </ul>
         </section>
+
+        <div id="login-modal" class="login-modal hidden">
+          <div class="login-card">
+            <h2>Reviewer login</h2>
+            <p class="hint">Enter your username and password to continue.</p>
+            <form id="login-form">
+              <label>
+                Username
+                <input id="login-username" name="username" type="text" autocomplete="username" required />
+              </label>
+              <label>
+                Password
+                <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+              </label>
+              <div class="login-error hidden" id="login-error"></div>
+              <div class="login-actions">
+                <button type="submit" class="button primary">Sign in</button>
+                <button type="button" class="button ghost" id="login-cancel">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
         <!--
           WHAT: Chat console wired to `/api/chat` for orchestrator validation.
           WHY: Lets reviewers reproduce issues and seed pending prompts without leaving the dashboard.
@@ -118,19 +132,21 @@
           </div>
           <div class="self-learning-grid">
             <div class="pending-column">
-              <div class="pending-toolbar">
-                <div>
-                  <p class="hint">Pending intents</p>
-                  <h3 id="pending-count-inline">0</h3>
-                </div>
-                <div class="pending-controls">
-                  <span class="page-indicator">Page <span id="pending-page">1</span></span>
-                  <div class="pending-nav">
-                    <button id="pending-prev" class="button ghost" type="button">Prev</button>
-                    <button id="pending-next" class="button ghost" type="button">Next</button>
-                  </div>
-                </div>
+          <div class="pending-toolbar">
+            <div>
+              <p class="hint">Pending intents</p>
+              <h3 id="pending-count-inline">0</h3>
+            </div>
+            <div class="pending-controls">
+              <span class="page-indicator">Page <span id="pending-page">1</span></span>
+              <div class="pending-nav">
+                <button id="pending-prev" class="button ghost" type="button">Prev</button>
+                <button id="pending-next" class="button ghost" type="button">Next</button>
               </div>
+              <button id="pending-scope-toggle" class="button ghost hidden" type="button">Show only my entries</button>
+              <span class="hint subtle hidden" id="pending-scope-badge"></span>
+            </div>
+          </div>
               <ul id="pending-list" class="pending-list"></ul>
             </div>
           </div>
@@ -192,6 +208,8 @@
               <h2>Data Stores</h2>
             </div>
             <button id="data-refresh" class="button ghost">Refresh Stores</button>
+            <button id="data-scope-toggle" class="button ghost hidden" type="button">Show only my entries</button>
+            <span class="hint subtle hidden" id="data-scope-badge"></span>
           </div>
           <div class="data-tabs" id="data-tabs">
             <button class="data-tab active" data-store="todos">Todos</button>
@@ -313,6 +331,62 @@
               <ul class="list" id="guide-list"></ul>
             </div>
           </div>
+        </section>
+
+        <!--
+          WHAT: Voice inbox telemetry plus rerun/delete controls for stored clips.
+          WHY: Reviewers need to revisit Whisper submissions, rerun them through chat, or delete stale audio.
+          HOW: Panel lists `/api/voice_inbox` entries with their metadata, actions, and minute totals.
+        -->
+        <section class="panel" id="voice-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Voice Inbox</h2>
+              <p class="hint">Stored voice clips with replay, rerun, and delete actions.</p>
+            </div>
+            <div class="subpanel-actions">
+              <button id="voice-refresh" class="button ghost" type="button">Refresh</button>
+            </div>
+          </div>
+          <div class="voice-stats">
+            <div class="voice-stat">
+              <p class="label">Minutes total</p>
+              <p class="value" id="voice-minutes-total">0</p>
+            </div>
+            <div class="voice-stat">
+              <p class="label">Minutes today</p>
+              <p class="value" id="voice-minutes-today">0</p>
+            </div>
+            <div class="voice-stat">
+              <p class="label">Budget (min)</p>
+              <p class="value" id="voice-minutes-budget">0</p>
+            </div>
+            <div class="voice-stat">
+              <p class="label">Remaining</p>
+              <p class="value" id="voice-minutes-remaining">0</p>
+            </div>
+          </div>
+          <div class="voice-table-wrapper">
+            <table class="data-table voice-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Status</th>
+                  <th>Transcript</th>
+                  <th>Minutes</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="voice-inbox-table"></tbody>
+            </table>
+            <p class="hint hidden" id="voice-table-empty">No voice clips yet.</p>
+          </div>
+          <div class="panel-footer voice-pager">
+            <button id="voice-prev" class="button ghost" type="button">Prev</button>
+            <span class="hint">Page <span id="voice-page">1</span></span>
+            <button id="voice-next" class="button ghost" type="button">Next</button>
+          </div>
+          <p class="hint subtle" id="voice-max-entries">Retention max 500 clips.</p>
         </section>
       </div>
 
@@ -515,7 +589,10 @@
       WHY: Async actions (imports, tool runs) need lightweight status feedback without blocking the UI.
       HOW: Hidden div toggled by app.js with text + animated opacity transitions.
     -->
-    <div id="toast" class="toast hidden"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite">
+      <span class="toast-text"></span>
+      <button type="button" class="toast-close" aria-label="Dismiss notification">×</button>
+    </div>
     <script type="module" src="/static/app.js"></script>
   </body>
 </html>

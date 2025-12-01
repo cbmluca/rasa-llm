@@ -28,6 +28,8 @@ _REVIEW_QUEUE_FILENAME = "pending.jsonl"
 _LABELED_QUEUE_FILENAME = "labeled_prompts.jsonl"
 _CORRECTED_QUEUE_FILENAME = "corrected_prompts.jsonl"
 _DEFAULT_VOICE_INBOX_PATH = "data_pipeline/voice_inbox.json"
+_DEFAULT_VOICE_INBOX_MAX_ENTRIES = 500
+_DEFAULT_DAILY_VOICE_MINUTES = 60
 _DEFAULT_LOG_REDACTION_PATTERNS = "email,phone,credit_card,gov_id,url"
 _DEFAULT_LOG_MAX_BYTES = 1_000_000
 _DEFAULT_LOG_BACKUP_COUNT = 5
@@ -138,6 +140,34 @@ def get_voice_inbox_path(env: Dict[str, str] | None = None) -> Path:
     source = env if env is not None else os.environ
     override = source.get("VOICE_INBOX_PATH")
     return Path(override) if override else Path(_DEFAULT_VOICE_INBOX_PATH)
+
+
+def get_voice_inbox_max_entries(env: Dict[str, str] | None = None) -> int:
+    """Return the upper bound on how many voice inbox rows to retain."""
+
+    source = env if env is not None else os.environ
+    raw = source.get("VOICE_INBOX_MAX_ENTRIES")
+    if raw is None:
+        return _DEFAULT_VOICE_INBOX_MAX_ENTRIES
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_VOICE_INBOX_MAX_ENTRIES
+    return max(1, value)
+
+
+def get_voice_daily_minutes_budget(env: Dict[str, str] | None = None) -> float:
+    """Return the Whisper budget in minutes that should be enforced daily."""
+
+    source = env if env is not None else os.environ
+    raw = source.get("VOICE_DAILY_MINUTES")
+    if raw is None:
+        return float(_DEFAULT_DAILY_VOICE_MINUTES)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(_DEFAULT_DAILY_VOICE_MINUTES)
+    return max(0.0, value)
 
 
 def is_log_redaction_enabled(env: Dict[str, str] | None = None) -> bool:

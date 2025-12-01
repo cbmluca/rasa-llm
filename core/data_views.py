@@ -314,6 +314,7 @@ def append_correction_entry(
     corrected_payload: Optional[Dict[str, Any]] = None,
     updated_stores: Optional[List[str]] = None,
     reviewer_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """WHAT: persist reviewer corrections in ``corrected_prompts.jsonl``.
 
@@ -369,6 +370,8 @@ def append_correction_entry(
         "updated_stores": list(updated_stores or []),
         "reviewer_id": reviewer_id,
     }
+    if user_id:
+        record["user_id"] = user_id
     corrected_path.parent.mkdir(parents=True, exist_ok=True)
     with corrected_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False))
@@ -540,6 +543,7 @@ def append_pending_prompt(
     field_versions: Optional[Dict[str, str]] = None,
     intended_entities: Optional[Sequence[Dict[str, Any]]] = None,
     reviewer_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """WHAT: append a structured pending record for reviewer triage.
 
@@ -602,6 +606,10 @@ def append_pending_prompt(
         "intended_entities": normalize_intended_entities(intended_entities),
         "reviewer_id": reviewer_id,
     }
+    if user_id:
+        record["user_id"] = user_id
+    elif reviewer_id:
+        record["user_id"] = reviewer_id
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     with pending_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False))

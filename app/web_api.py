@@ -16,7 +16,7 @@ from uuid import uuid4
 import logging
 import re
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,11 +31,15 @@ from app.config import (
     get_reviewer_token,
     get_speech_to_text_model,
     get_turn_log_path,
+    get_voice_daily_minutes_budget,
+    get_voice_inbox_max_entries,
     get_voice_inbox_path,
 )
 from app.main import build_orchestrator
+from core import auth
 from core.data_views import (
     iter_jsonl,
+    iter_pending_prompts,
     append_correction_entry,
     append_labels,
     append_pending_prompt,
@@ -57,7 +61,15 @@ from core.intent_config import load_intent_config
 from core.tooling.store_config import DATA_STORE_TO_TOOL, TOOL_TO_STORE, is_mutating_action
 from core.text_utils import hash_text
 from core.governance import GovernancePolicy, GovernancePolicyViolation
-from core.voice_inbox import append_voice_inbox_entry, build_voice_entry
+from core.voice_inbox import (
+    append_voice_inbox_entry,
+    build_voice_entry,
+    delete_voice_entry,
+    estimate_voice_minutes,
+    find_voice_entry,
+    read_voice_inbox_entries,
+    VoiceInboxEntry,
+)
 
 REVIEWER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{2,64}$")
 logger = logging.getLogger(__name__)
@@ -124,6 +136,15 @@ def _transcribe_audio_bytes(payload: bytes, filename: str) -> str:
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+class VoiceInboxActionPayload(BaseModel):
+    entry_id: str
 
 
 class CorrectionPayload(BaseModel):
@@ -248,6 +269,36 @@ def _summarize_turn_log(path: Path, *, days: int = 7, sample_limit: int = 5) -> 
     return summary
 
 
+def _summarize_voice_inbox_entries(path: Path) -> Dict[str, Any]:
+    """Return usage totals plus the raw entries for voice inbox tooling."""
+
+    entries = read_voice_inbox_entries(path) if path.exists() else []
+    now = datetime.now(tz=timezone.utc)
+    total_minutes = 0.0
+    today_minutes = 0.0
+    for entry in entries:
+        minutes = float(entry.voice_minutes or 0.0)
+        total_minutes += minutes
+        entry_ts = _parse_timestamp(entry.timestamp)
+        if entry_ts and entry_ts.date() == now.date():
+            today_minutes += minutes
+    return {
+        "entries": entries,
+        "total_minutes": round(total_minutes, 3),
+        "today_minutes": round(today_minutes, 3),
+    }
+
+
+def _sort_voice_entries(entries: List[VoiceInboxEntry]) -> List[VoiceInboxEntry]:
+    """Return entries ordered by timestamp (newest first)."""
+
+    def _key(entry: VoiceInboxEntry) -> float:
+        ts = _parse_timestamp(entry.timestamp)
+        return ts.timestamp() if ts else 0.0
+
+    return sorted(entries, key=_key, reverse=True)
+
+
 def _read_purge_state(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
@@ -318,26 +369,12 @@ def create_app(
     app.state.default_reviewer_id = get_default_reviewer_id()
     app.state.reviewer_token = token
     app.state.purge_state_path = purge_state
+    app.state.session_manager = auth.SessionManager()
+    app.state.quota_manager = auth.QuotaManager()
+    app.state.default_admin_user = auth.DEFAULT_ADMIN_USERNAME
 
     app.mount("/static", StaticFiles(directory=static_root, check_dir=False), name="static")
     app.mount("/exports", StaticFiles(directory=exports_root, check_dir=False), name="exports")
-
-    def _resolve_reviewer_id(request: Request) -> str:
-        """Extract or default the reviewer identifier for the current request."""
-        raw = request.headers.get("x-reviewer-id") or request.query_params.get("reviewer_id")
-        default_id = app.state.default_reviewer_id
-        if raw:
-            candidate = raw.strip()
-            if not candidate:
-                raise HTTPException(status_code=400, detail="Reviewer ID cannot be blank.")
-            if not REVIEWER_ID_PATTERN.fullmatch(candidate):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Reviewer ID must be 2-64 characters (letters, numbers, dot, underscore, or hyphen).",
-                )
-            return candidate
-        logger.warning("Reviewer ID missing on %s; defaulting to '%s'.", request.url.path, default_id)
-        return default_id
 
     def _require_reviewer_token(request: Request) -> None:
         """Enforce the shared reviewer token when configured."""
@@ -352,21 +389,72 @@ def create_app(
         if not hmac.compare_digest(candidate, expected):
             raise HTTPException(status_code=403, detail="Reviewer token is invalid.")
 
-    def _handle_chat_submission(message: str, reviewer_id: str, *, submission_reason: str) -> Dict[str, Any]:
+    def _require_authenticated_user(request: Request) -> auth.UserRecord:
+        """Return the user tied to the active session or fallback reviewer token."""
+
+        session_token = request.cookies.get(auth.SESSION_COOKIE_NAME)
+        if session_token:
+            session_user = app.state.session_manager.get_user(session_token)
+            if session_user:
+                return session_user
+        if app.state.reviewer_token:
+            _require_reviewer_token(request)
+            fallback_user = auth.get_user(app.state.default_admin_user)
+            if fallback_user:
+                return fallback_user
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    def _require_admin_user(request: Request) -> auth.UserRecord:
+        user = _require_authenticated_user(request)
+        if not user.is_admin():
+            raise HTTPException(status_code=403, detail="Admin access required.")
+        return user
+
+    def _filter_records_for_user(records: list[dict], user: auth.UserRecord) -> list[dict]:
+        if user.is_admin():
+            return records
+        return [record for record in records if auth.record_owner(record) == user.username]
+
+    def _summarize_records(records: list[dict]) -> dict:
+        total = len(records)
+        by_intent: Dict[str, int] = {}
+        for record in records:
+            intent = record.get("intent") or record.get("parser_intent") or "nlu_fallback"
+            by_intent[intent] = by_intent.get(intent, 0) + 1
+        return {"total": total, "by_intent": by_intent}
+
+    def _filter_store_result(data: Dict[str, Any], user: auth.UserRecord) -> Dict[str, Any]:
+        if user.is_admin():
+            return data
+        filtered = dict(data)
+        for key, value in data.items():
+            if isinstance(value, list):
+                filtered[key] = [item for item in value if auth.record_owner(item) == user.username]
+        if "todos" in filtered:
+            filtered["count"] = len(filtered["todos"])
+        return filtered
+
+    def _handle_chat_submission(message: str, user: auth.UserRecord, *, submission_reason: str) -> Dict[str, Any]:
         """Run a chat message through the orchestrator + pending queue plumbing."""
 
         clean = (message or "").strip()
         if not clean:
             raise HTTPException(status_code=400, detail="Message is required.")
+        try:
+            app.state.quota_manager.consume_prompt(user)
+        except auth.QuotaExceededError as exc:
+            raise HTTPException(status_code=429, detail=str(exc))
         result = app.state.orchestrator.handle_message_with_details(clean)
         formatted = _format_response(result)
         policy_version = app.state.governance_policy.policy_version
         formatted_extras = dict(formatted.get("extras") or {})
         formatted_extras.setdefault("policy_version", policy_version)
-        formatted_extras.setdefault("reviewer_id", reviewer_id)
+        formatted_extras.setdefault("reviewer_id", user.username)
+        formatted_extras.setdefault("user_id", user.username)
         formatted["extras"] = formatted_extras
         formatted["policy_version"] = policy_version
-        formatted["reviewer_id"] = reviewer_id
+        formatted["reviewer_id"] = user.username
+        formatted["user_id"] = user.username
         review_reason = formatted.get("review_reason") or submission_reason or "chat_submission"
         formatted["review_reason"] = review_reason
         history_prompts = [
@@ -387,7 +475,8 @@ def create_app(
                 staged=formatted_extras.get("staged", False),
                 related_prompts=history_prompts,
                 conversation_entry_id=formatted_extras.get("conversation_entry_id"),
-                reviewer_id=reviewer_id,
+                reviewer_id=user.username,
+                user_id=user.username,
             )
             if pending_result.get("record"):
                 formatted["pending_record"] = pending_result["record"]
@@ -422,20 +511,56 @@ def create_app(
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
 
-    @app.post("/api/chat")
-    def chat(payload: ChatRequest, request: Request) -> Dict[str, Any]:
-        """WHAT: bridge user chat to Tier‑1 and seed the pending queue."""
+    @app.post("/api/login")
+    def login(payload: LoginPayload, response: Response) -> Dict[str, Any]:
+        normalized = payload.username.strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Username is required.")
+        user = auth.authenticate(normalized, payload.password or "")
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials.")
+        session_token = app.state.session_manager.create_session(user.username)
+        response.set_cookie(
+            auth.SESSION_COOKIE_NAME,
+            session_token,
+            httponly=True,
+            secure=False,
+            samesite="lax",
+            max_age=auth.SESSION_MAX_AGE_SECONDS,
+        )
+        return {
+            "username": user.username,
+            "roles": sorted(user.roles),
+            "usage": app.state.quota_manager.get_usage(user),
+        }
 
-        _require_reviewer_token(request)
-        reviewer_id = _resolve_reviewer_id(request)
-        return _handle_chat_submission(payload.message, reviewer_id, submission_reason="chat_submission")
+    @app.post("/api/logout")
+    def logout(request: Request, response: Response) -> Dict[str, str]:
+        session_token = request.cookies.get(auth.SESSION_COOKIE_NAME)
+        if session_token:
+            app.state.session_manager.destroy_session(session_token)
+        response.delete_cookie(auth.SESSION_COOKIE_NAME)
+        return {"status": "ok"}
+
+    @app.get("/api/me")
+    def me(request: Request) -> Dict[str, Any]:
+        user = _require_authenticated_user(request)
+        return {
+            "username": user.username,
+            "roles": sorted(user.roles),
+            "usage": app.state.quota_manager.get_usage(user),
+        }
+
+    @app.post("/api/chat")
+    def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
+        reviewer = _require_authenticated_user(request)
+        return _handle_chat_submission(payload.message, reviewer, submission_reason="chat_submission")
 
     @app.post("/api/speech")
     async def speech(request: Request, audio: UploadFile = File(...)) -> Dict[str, Any]:
         """WHAT: accept short recordings, transcribe them, and reuse chat flow."""
 
-        _require_reviewer_token(request)
-        reviewer_id = _resolve_reviewer_id(request)
+        user = _require_authenticated_user(request)
         if audio is None:
             raise HTTPException(status_code=400, detail="Audio file is required.")
         payload = await audio.read()
@@ -459,7 +584,7 @@ def create_app(
             transcription_status = "completed"
             chat_payload = _handle_chat_submission(
                 transcription_text,
-                reviewer_id,
+                user,
                 submission_reason="voice_submission",
             )
             pending_record = chat_payload.get("pending_record") or {}
@@ -476,9 +601,11 @@ def create_app(
                 audio_path=audio_path,
                 text=transcription_text,
                 status=transcription_status,
-                reviewer_id=reviewer_id,
+                reviewer_id=user.username,
                 pending_id=pending_id,
+                voice_minutes=estimate_voice_minutes(len(payload)),
             ),
+            max_entries=get_voice_inbox_max_entries(),
         )
 
         response: Dict[str, Any] = {
@@ -493,6 +620,72 @@ def create_app(
             response["error"] = error_detail
         return response
 
+    @app.get("/api/voice_inbox")
+    def voice_inbox(request: Request, limit: int = 25, page: int = 1) -> Dict[str, Any]:
+        """WHAT: expose stored voice submissions for Tier-7 reviewers."""
+
+        _require_authenticated_user(request)
+        capped_limit = max(1, min(limit, 100))
+        page = max(page, 1)
+        summary = _summarize_voice_inbox_entries(app.state.voice_inbox_path)
+        entries = _sort_voice_entries(summary["entries"])
+        total_entries = len(entries)
+        start = (page - 1) * capped_limit
+        page_entries = entries[start : start + capped_limit]
+        has_more = start + len(page_entries) < total_entries
+        budget = get_voice_daily_minutes_budget()
+        remaining = round(max(0.0, budget - summary["today_minutes"]), 3)
+        return {
+            "items": [entry.to_dict() for entry in page_entries],
+            "total_entries": total_entries,
+            "limit": capped_limit,
+            "page": page,
+            "has_more": has_more,
+            "voice_minutes_total": summary["total_minutes"],
+            "voice_minutes_today": summary["today_minutes"],
+            "voice_minutes_budget": budget,
+            "voice_minutes_remaining": remaining,
+            "max_entries": get_voice_inbox_max_entries(),
+        }
+
+    @app.post("/api/voice_inbox/rerun")
+    def voice_inbox_rerun(payload: VoiceInboxActionPayload, request: Request) -> Dict[str, Any]:
+        """WHAT: rerun the stored transcription through the chat flow."""
+
+        user = _require_authenticated_user(request)
+        summary = _summarize_voice_inbox_entries(app.state.voice_inbox_path)
+        entry = find_voice_entry(summary["entries"], payload.entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Voice inbox entry not found.")
+        if not entry.transcribed_text:
+            raise HTTPException(status_code=400, detail="Entry has no transcription to rerun.")
+        chat_payload = _handle_chat_submission(
+            entry.transcribed_text,
+            user,
+            submission_reason="voice_rerun",
+        )
+        extras = chat_payload.setdefault("extras", {})
+        extras.setdefault("correction_note", f"Voice rerun from inbox {entry.id}")
+        extras["voice_rerun_entry"] = entry.id
+        chat_payload["review_reason"] = "voice_rerun"
+        return {"chat": chat_payload, "voice_entry": entry.to_dict()}
+
+    @app.post("/api/voice_inbox/delete")
+    def voice_inbox_delete(payload: VoiceInboxActionPayload, request: Request) -> Dict[str, Any]:
+        """WHAT: remove a voice entry and its uploaded audio."""
+
+        _require_authenticated_user(request)
+        deleted = delete_voice_entry(app.state.voice_inbox_path, payload.entry_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Voice inbox entry not found.")
+        audio_path = Path(deleted.audio_path)
+        try:
+            if audio_path.exists():
+                audio_path.unlink()
+        except OSError:
+            logger.warning("Failed to delete voice upload %s.", audio_path)
+        return {"deleted_entry_id": deleted.id}
+
     @app.get("/api/logs/pending")
     def pending_logs(request: Request, limit: int = 25, page: int = 1) -> Dict[str, Any]:
         """WHAT: fetch paginated pending prompts for Tier‑5 reviewers.
@@ -502,7 +695,7 @@ def create_app(
         HOW: cap page/limit inputs, call ``list_pending_with_hashes`` to ensure
         prompt ids/hashes exist, and augment response with queue summary/flags.
         """
-        _require_reviewer_token(request)
+        _require_authenticated_user(request)
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         items = list_pending_with_hashes(app.state.pending_path, limit=capped_limit, page=page)
@@ -528,7 +721,7 @@ def create_app(
         HOW: delegate to ``review_classifier_predictions`` which filters the
         turn log plus labeled file for interesting entries.
         """
-        _require_reviewer_token(request)
+        user = _require_admin_user(request)
         findings = review_classifier_predictions(
             turn_log=app.state.turn_log_path,
             labeled_path=app.state.labeled_path,
@@ -546,7 +739,7 @@ def create_app(
         HOW: call ``load_labeled_prompts`` with limit/intent filters and return
         the resulting list.
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         records = load_labeled_prompts(app.state.labeled_path, limit=max(1, min(limit, 200)), intent=intent)
         return {"items": records}
 
@@ -559,7 +752,7 @@ def create_app(
         HOW: rely on ``load_corrected_prompts`` for pagination/filtering and
         return its structured dict (items + counts).
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         capped_limit = max(1, min(limit, 200))
         page = max(page, 1)
         data = load_corrected_prompts(
@@ -610,8 +803,7 @@ def create_app(
         action mutates data, append a correction entry, drop pending rows (plus
         related prompts), and update conversation memory when available.
         """
-        _require_reviewer_token(request)
-        reviewer_id = _resolve_reviewer_id(request)
+        reviewer = _require_admin_user(request)
         reviewer_action = payload.action or str(payload.corrected_payload.get("action", "")).strip()
         corrected_payload = dict(payload.corrected_payload or {})
         if reviewer_action:
@@ -658,7 +850,8 @@ def create_app(
                 corrected_payload=corrected_payload,
                 corrected_path=app.state.corrected_path,
                 updated_stores=updated_stores,
-                reviewer_id=reviewer_id,
+                reviewer_id=reviewer.username,
+                user_id=reviewer.username,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -679,7 +872,7 @@ def create_app(
             "record": record,
             "updated_stores": updated_stores,
             "latest_tool_result": tool_result,
-            "reviewer_id": reviewer_id,
+            "reviewer_id": reviewer.username,
         }
 
     @app.delete("/api/logs/pending/{prompt_id}")
@@ -691,7 +884,7 @@ def create_app(
         HOW: call ``delete_pending_entry`` with the provided id/hash and return
         a confirmation or 404 when nothing matched.
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         if not prompt_id:
             raise HTTPException(status_code=400, detail="prompt_id is required.")
         removed = delete_pending_entry(app.state.pending_path, prompt_id)
@@ -708,7 +901,7 @@ def create_app(
         HOW: load ``intent_config`` and return both the string list and action
         per intent map.
         """
-        _require_reviewer_token(request)
+        _require_authenticated_user(request)
         config = load_intent_config()
         return {
             "intents": config.names(),
@@ -724,7 +917,7 @@ def create_app(
         HOW: validate format, call ``export_pending`` into a timestamped folder,
         and translate output paths into mount-relative URLs for download.
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         fmt = fmt.lower()
         if fmt not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -757,7 +950,7 @@ def create_app(
         HOW: persist upload to a temp file, call ``append_labels`` with format
         metadata, and delete the temp file regardless of success.
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         fmt_value = fmt.lower()
         if fmt_value not in {"csv", "json"}:
             raise HTTPException(status_code=400, detail="Format must be csv or json.")
@@ -789,13 +982,13 @@ def create_app(
         HOW: map ``store_id`` to a tool via ``DATA_STORE_TO_TOOL`` and run the
         orchestrator with its list payload.
         """
-        _require_reviewer_token(request)
+        user = _require_authenticated_user(request)
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
         payload = dict(config.get("list_payload", {"action": "list"}))
         result = app.state.orchestrator.run_tool(config["tool"], payload)
-        return result
+        return _filter_store_result(result, user)
 
     @app.post("/api/data/{store_id}")
     def mutate_store(store_id: str, payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
@@ -806,7 +999,7 @@ def create_app(
         HOW: validate payload shape, ensure the store is known, forward the
         request to the corresponding tool, and bubble up tool errors as HTTP 400.
         """
-        _require_reviewer_token(request)
+        _require_admin_user(request)
         config = DATA_STORE_TO_TOOL.get(store_id)
         if not config:
             raise HTTPException(status_code=404, detail="Unknown data store.")
@@ -828,19 +1021,28 @@ def create_app(
         HOW: call ``summarize_pending_queue``, count corrected rows, sample
         recent pending entries, and optionally include the classifier report.
         """
-        _require_reviewer_token(request)
-        pending_summary = summarize_pending_queue(app.state.pending_path)
+        user = _require_authenticated_user(request)
+        pending_summary = (
+            summarize_pending_queue(app.state.pending_path)
+            if user.is_admin()
+            else _summarize_records(
+                _filter_records_for_user(list(iter_pending_prompts(app.state.pending_path)), user)
+            )
+        )
         corrected_count = count_jsonl_rows(app.state.corrected_path)
         classifier_report = _read_json_if_exists(CLASSIFIER_REPORT_PATH)
         policy: GovernancePolicy = app.state.governance_policy
         turn_metrics = _summarize_turn_log(app.state.turn_log_path)
         purge_state = _read_purge_state(app.state.purge_state_path)
         eval_report = _read_json_if_exists(EVAL_RESULTS_PATH)
+        voice_summary = _summarize_voice_inbox_entries(app.state.voice_inbox_path)
+        voice_budget = get_voice_daily_minutes_budget()
+        voice_remaining = round(max(0.0, voice_budget - voice_summary["today_minutes"]), 3)
         return {
             "pending": pending_summary,
             "labeled_count": corrected_count,
             "corrected_count": corrected_count,
-            "pending_sample": list_recent_pending(app.state.pending_path, limit=25),
+            "pending_sample": _filter_records_for_user(list_recent_pending(app.state.pending_path, limit=25), user),
             "classifier_report": classifier_report,
             "policy_version": policy.policy_version,
             "allowed_tools": list(policy.allowed_tools),
@@ -852,6 +1054,14 @@ def create_app(
             "policy_violation_count": turn_metrics["policy_violation_count"],
             "policy_violation_samples": turn_metrics["policy_violation_samples"],
             "eval_results": eval_report,
+            "voice_stats": {
+                "total_minutes": voice_summary["total_minutes"],
+                "today_minutes": voice_summary["today_minutes"],
+                "daily_budget_minutes": voice_budget,
+                "minutes_remaining": voice_remaining,
+                "total_entries": len(voice_summary["entries"]),
+                "max_entries": get_voice_inbox_max_entries(),
+            },
         }
 
     return app

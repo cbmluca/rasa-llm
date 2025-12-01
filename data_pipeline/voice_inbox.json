@@ -6,7 +6,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "06f2cbc7db614b98af6abac80fcae45c",
@@ -15,7 +16,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "3c254dc13b354db995e37ceefe5773b1",
@@ -24,7 +26,8 @@
     "transcribed_text": "This is a test 123, this is a test. Please create a to-do called \"test 123\", deadline tonight.",
     "status": "completed",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "f4349b44670642518fb0cba536989583",
@@ -33,7 +36,8 @@
     "transcribed_text": "Please create 888.",
     "status": "completed",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "e17f135d8d0c4b408a79544b005ddce1",
@@ -42,7 +46,8 @@
     "transcribed_text": "This is a test, please create an event called Budget Sync with deadline tomorrow evening.",
     "status": "completed",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "3e24e0efaaa7423bb0bb86c11c45bfa3",
@@ -51,7 +56,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "72988e5c07e748caa85571f14494dfea",
@@ -60,7 +66,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "147b76292fd14c209a52e18529e450c0",
@@ -69,7 +76,8 @@
     "transcribed_text": "Biro.",
     "status": "completed",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "c4bc56f68e824b7997ab252aaa880b5c",
@@ -78,16 +86,8 @@
     "transcribed_text": "This is a",
     "status": "completed",
     "reviewer_id": "LCBM",
-    "pending_id": null
-  },
-  {
-    "id": "5186a1cee26845ed9a8b8f0e5025d659",
-    "timestamp": "2025-11-25T22:03:24.421029+00:00",
-    "audio_path": "data_pipeline/voice_uploads/5186a1cee26845ed9a8b8f0e5025d659.webm",
-    "transcribed_text": "Create a to-do for tomorrow which is called Online Voice Mac please.",
-    "status": "completed",
-    "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "701cc1428c834eaea3f13374a0aacfec",
@@ -96,7 +96,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "cea467b8e2844c2790983c3e36dcb121",
@@ -105,7 +106,8 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   },
   {
     "id": "a6412f703419464687aacb8949219aa7",
@@ -114,6 +116,7 @@
     "transcribed_text": "",
     "status": "error",
     "reviewer_id": "LCBM",
-    "pending_id": null
+    "pending_id": null,
+    "voice_minutes": 0.0
   }
 ]

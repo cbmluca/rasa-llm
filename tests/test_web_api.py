@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.web_api import create_app
 from core.nlu_service import NLUResult
 from core.orchestrator import OrchestratorResponse
+from core.voice_inbox import build_voice_entry
 from core.governance import GovernancePolicy, GovernancePolicyViolation
 
 
@@ -49,7 +50,7 @@ class StubOrchestrator:
                 tool=tool_name,
             )
         if tool_name == "todo_list":
-            return {"todos": [{"id": "1", "title": "Test", "status": "pending"}]}
+            return {"todos": [{"id": "1", "title": "Test", "status": "pending", "owner": "LCBM"}], "count": 1}
         if tool_name == "kitchen_tips":
             return {"tips": []}
         if tool_name == "calendar_edit":
@@ -70,8 +71,8 @@ def build_client(
     tmp_path: Path,
     orchestrator: StubOrchestrator | None = None,
     policy: GovernancePolicy | None = None,
-    reviewer_id: str | None = "tester",
-    reviewer_token: str | None = "secret-token",
+    username: str | None = "LCBM",
+    password: str = "testing123",
 ) -> TestClient:
     pending = tmp_path / "pending.jsonl"
     labeled = tmp_path / "labeled.jsonl"
@@ -103,15 +104,13 @@ def build_client(
         export_dir=export_dir,
         voice_inbox_path=voice_inbox_path,
         voice_upload_dir=voice_upload_dir,
-        reviewer_token=reviewer_token,
         governance_policy=policy,
         purge_state_path=tmp_path / "purge_state.json",
     )
     client = TestClient(app)
-    if reviewer_token:
-        client.headers.update({"X-Reviewer-Token": reviewer_token})
-    if reviewer_id:
-        client.headers.update({"X-Reviewer-ID": reviewer_id})
+    if username:
+        response = client.post("/api/login", json={"username": username, "password": password})
+        assert response.status_code == 200, f"login failed: {response.text}"
     return client
 
 
@@ -123,29 +122,53 @@ def test_chat_endpoint_returns_trace(tmp_path: Path) -> None:
     assert payload["reply"] == "It is sunny"
     assert payload["tool"]["name"] == "weather"
     assert payload["extras"]["resolved_tool"] == "weather"
-    assert payload["extras"]["reviewer_id"] == "tester"
-    assert payload["reviewer_id"] == "tester"
-    assert payload.get("pending_record", {}).get("reviewer_id") == "tester"
+    expected_user = client.app.state.default_admin_user
+    assert payload["extras"]["reviewer_id"] == expected_user
+    assert payload["extras"]["user_id"] == expected_user
+    assert payload["reviewer_id"] == expected_user
+    assert payload["user_id"] == expected_user
+    assert payload.get("pending_record", {}).get("reviewer_id") == expected_user
     assert payload["extras"]["policy_version"] == "test"
     assert payload["policy_version"] == "test"
 
 
-def test_chat_endpoint_defaults_reviewer_id(tmp_path: Path) -> None:
-    client = build_client(tmp_path, reviewer_id=None)
+def test_chat_endpoint_reports_custom_user(tmp_path: Path) -> None:
+    client = build_client(tmp_path, username="test1", password="test1")
     response = client.post("/api/chat", json={"message": "hi"})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["reviewer_id"] == client.app.state.default_reviewer_id
+    assert payload["reviewer_id"] == "test1"
+    assert payload["user_id"] == "test1"
 
 
-def test_chat_endpoint_rejects_invalid_reviewer_id(tmp_path: Path) -> None:
-    client = build_client(tmp_path, reviewer_id=None)
-    response = client.post(
-        "/api/chat",
-        json={"message": "weather tomorrow"},
-        headers={"X-Reviewer-ID": "!", "X-Reviewer-Token": "secret-token"},
+def test_chat_requires_login(tmp_path: Path) -> None:
+    orchestrator = StubOrchestrator()
+    client = TestClient(
+        create_app(
+            orchestrator=orchestrator,
+            pending_path=tmp_path / "pending.jsonl",
+            labeled_path=tmp_path / "labeled.jsonl",
+            turn_log_path=tmp_path / "turns.jsonl",
+            static_dir=tmp_path / "static",
+            export_dir=tmp_path / "exports",
+            voice_inbox_path=tmp_path / "voice_inbox.json",
+            voice_upload_dir=tmp_path / "voice_uploads",
+            reviewer_token="secret-token",
+            governance_policy=GovernancePolicy.from_dict(
+                {
+                    "policy_version": "test",
+                    "allowed_models": ["gpt-4o-mini"],
+                    "allowed_tools": ["weather", "todo_list", "kitchen_tips", "calendar_edit", "app_guide", "news"],
+                    "retention_max_entries": {"turn_logs": 200, "pending_queue": 200, "corrected_prompts": 200, "tool_stores": 200},
+                    "reviewer_roles": [],
+                    "pii_rules": [],
+                }
+            ),
+            purge_state_path=tmp_path / "purge_state.json",
+        )
     )
-    assert response.status_code == 400
+    response = client.post("/api/chat", json={"message": "hi"})
+    assert response.status_code == 401
 
 
 def test_chat_persists_reviewer_id_in_pending_file(tmp_path: Path) -> None:
@@ -155,7 +178,7 @@ def test_chat_persists_reviewer_id_in_pending_file(tmp_path: Path) -> None:
     pending_path = client.app.state.pending_path
     rows = pending_path.read_text(encoding="utf-8").strip().splitlines()
     record = json.loads(rows[-1])
-    assert record["reviewer_id"] == "tester"
+    assert record["reviewer_id"] == client.app.state.default_admin_user
 
 
 def test_logs_routes_return_written_data(tmp_path: Path) -> None:
@@ -234,6 +257,77 @@ def test_speech_endpoint_runs_chat_flow(tmp_path: Path, monkeypatch: pytest.Monk
     assert inbox_rows[-1]["pending_id"] == payload["pending_id"]
 
 
+def test_voice_inbox_endpoint_returns_entries(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    entry = build_voice_entry(
+        entry_id="voice-1",
+        audio_path=tmp_path / "memo.webm",
+        text="note",
+        status="completed",
+        reviewer_id="LCBM",
+        pending_id="pending-1",
+        voice_minutes=0.5,
+    )
+    client.app.state.voice_inbox_path.write_text(
+        json.dumps([entry.to_dict()]), encoding="utf-8"
+    )
+
+    response = client.get("/api/voice_inbox")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_entries"] == 1
+    assert payload["items"][0]["id"] == "voice-1"
+    assert payload["voice_minutes_total"] == 0.5
+
+
+def test_voice_rerun_endpoint_triggers_chat(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    entry = build_voice_entry(
+        entry_id="voice-2",
+        audio_path=tmp_path / "memo.webm",
+        text="weather rerun",
+        status="completed",
+        reviewer_id="LCBM",
+        pending_id="pending-2",
+        voice_minutes=0.1,
+    )
+    client.app.state.voice_inbox_path.write_text(
+        json.dumps([entry.to_dict()]), encoding="utf-8"
+    )
+
+    response = client.post("/api/voice_inbox/rerun", json={"entry_id": "voice-2"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chat"]["reply"] == "It is sunny"
+    assert payload["chat"]["review_reason"] == "voice_rerun"
+    assert payload["chat"]["extras"]["voice_rerun_entry"] == "voice-2"
+    assert payload["voice_entry"]["id"] == "voice-2"
+
+
+def test_voice_delete_endpoint_removes_entry(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    upload = client.app.state.voice_upload_dir / "memo.webm"
+    upload.write_bytes(b"audio")
+    entry = build_voice_entry(
+        entry_id="voice-3",
+        audio_path=upload,
+        text="delete me",
+        status="completed",
+        reviewer_id="LCBM",
+        pending_id="pending-3",
+        voice_minutes=0.2,
+    )
+    client.app.state.voice_inbox_path.write_text(
+        json.dumps([entry.to_dict()]), encoding="utf-8"
+    )
+
+    response = client.post("/api/voice_inbox/delete", json={"entry_id": "voice-3"})
+    assert response.status_code == 200
+    assert not upload.exists()
+    rows = json.loads(client.app.state.voice_inbox_path.read_text(encoding="utf-8"))
+    assert rows == []
+
+
 def test_label_endpoint_blocks_disallowed_tool(tmp_path: Path) -> None:
     orchestrator = StubOrchestrator()
     orchestrator.blocked_tools.add("todo_list")
@@ -276,12 +370,44 @@ def test_label_endpoint_returns_reviewer_id(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["reviewer_id"] == "tester"
-    assert body["record"]["reviewer_id"] == "tester"
+    assert body["reviewer_id"] == client.app.state.default_admin_user
+    assert body["record"]["reviewer_id"] == client.app.state.default_admin_user
     corrected_path = client.app.state.corrected_path
     rows = corrected_path.read_text(encoding="utf-8").strip().splitlines()
     record = json.loads(rows[-1])
-    assert record["reviewer_id"] == "tester"
+    assert record["reviewer_id"] == client.app.state.default_admin_user
+
+
+def test_stats_filters_pending_for_user(tmp_path: Path) -> None:
+    client = build_client(tmp_path, username="test1", password="test1")
+    pending_path = client.app.state.pending_path
+    extra_rows = [
+        {"user_text": "alpha", "intent": "todo_list", "timestamp": "2024-01-01T00:00:00Z", "user_id": "test1"},
+        {"user_text": "beta", "intent": "weather", "timestamp": "2024-01-02T00:00:00Z", "user_id": client.app.state.default_admin_user},
+    ]
+    _write_jsonl(pending_path, extra_rows)
+
+    response = client.get("/api/stats")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pending"]["total"] == 1
+    assert payload["pending"]["by_intent"]["todo_list"] == 1
+    assert all(record.get("user_id") == "test1" for record in payload["pending_sample"])
+
+
+def test_data_store_filters_non_admin(tmp_path: Path) -> None:
+    orchestrator = StubOrchestrator()
+    client = build_client(tmp_path, orchestrator=orchestrator, username="test1", password="test1")
+    response = client.get("/api/data/todos")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["todos"] == []
+    assert data["count"] == 0
+
+    admin_client = build_client(tmp_path, orchestrator=orchestrator, username="LCBM", password="testing123")
+    admin_response = admin_client.get("/api/data/todos")
+    assert admin_response.status_code == 200
+    assert admin_response.json()["todos"][0]["title"] == "Test"
 
 
 def test_stats_includes_governance_metadata(tmp_path: Path) -> None:
