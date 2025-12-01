@@ -107,3 +107,7 @@ export async function loadPending(preserveSelection = false) {
   }
   queueDependencies.selectPendingPrompt(state.pending[0]);
 }
+
+export function applyPronounResolution(fields, item) {
+  return fields;
+}

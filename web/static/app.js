@@ -6,12 +6,8 @@ import {
   FIELD_LIBRARY,
   FIELD_ORDER,
   getFieldLabel,
-  formatNotesSectionHeading,
   getNoteSectionTitles,
-  INTENDED_ENTITY_ACTIONS,
-  INTENDED_ENTITY_TOOLS,
   MUTATING_ACTIONS,
-  SELECTABLE_DATA_STORES,
   STORAGE_KEYS,
   TITLE_LOOKUP_ACTIONS,
   TITLE_LOOKUP_TOOLS,
@@ -23,21 +19,17 @@ import {
   state,
   el,
   navButtons,
-  PURGE_MAX_AGE_DAYS,
-  TRAINING_ALERT_INCREMENT,
   VOICE_MIN_DURATION_MS,
   VOICE_MAX_DURATION_MS,
   VOICE_MIME_TYPES,
-  POLL_INTERVAL_MS,
 } from './src/shared.js';
 import {
-  formatPreviewValue,
-  formatTimestamp,
   hideToast,
   setChatStatus,
   setVoiceStatus,
   showToast,
 } from './src/utils.js';
+import { applyFieldLayout, buildRelativeDateOptions, buildRelativeTimeOptions, fieldHasValue } from './src/toolUtils.js';
 import {
   normalizeRelatedPromptsList,
   normalizeIntendedEntities,
@@ -63,18 +55,15 @@ import {
   refreshActiveDataTab,
   setActiveDataTab,
   mutateStore,
-  renderTodos,
   renderCalendar,
   renderKitchen,
   renderNotes,
-  setTodoSort,
   setCalendarSort,
   setKitchenSort,
 } from './src/dataStores.js';
 import { configurePendingPolling, persistPendingState, startPendingPolling, stopPendingPolling } from './src/pendingPolling.js';
-import { configurePendingQueue, loadPending } from './src/pendingQueue.js';
+import { configurePendingQueue, loadPending, applyPronounResolution } from './src/pendingQueue.js';
 import {
-  renderClassifier,
   renderCorrectedTable,
   renderVersionHistory,
   renderLatestConfirmed,
@@ -83,6 +72,15 @@ import {
   loadCorrected,
   loadStats,
 } from './src/pendingStats.js';
+import {
+  renderTodos,
+  renderTodoCrudForm,
+  handleTodoFormSubmit,
+  resetTodoForm,
+  setTodoCrudAction,
+  setTodoSort,
+} from './src/todoTool.js';
+import { configureVoiceInbox, loadVoiceInbox, changeVoiceInboxPage } from './src/voiceInbox.js';
 
 const COMBOBOX_DEFAULT_LIMIT = 8;
 let comboboxIdCounter = 0;
@@ -433,44 +431,6 @@ function buildReviewerHeaders(base = {}) {
     headers['X-Reviewer-ID'] = reviewerId;
   }
   return headers;
-}
-
-// WHAT: standardize AJAX calls with JSON parsing and friendly errors.
-// WHY: every frontend API call should share headers/logic so errors propagate consistently.
-// HOW: invoked by every `/api/...` call so it wraps `fetch`, parses success (incl. 204), and bubbles server detail strings when orchestration endpoints fail.
-async function fetchJSON(url, options = {}) {
-  const headers = buildReviewerHeaders({
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  });
-  const response = await fetch(url, {
-    headers,
-    credentials: 'include',
-    ...options,
-  });
-  if (response.ok) {
-    if (response.status === 204) {
-      return null;
-    }
-    const text = await response.text();
-    return text ? JSON.parse(text) : null;
-  }
-  let detail = response.statusText;
-  try {
-    const payload = await response.json();
-    detail =
-      payload?.detail?.message ||
-      payload?.detail ||
-      payload?.message ||
-      payload?.error ||
-      (typeof payload === 'string' ? payload : JSON.stringify(payload));
-  } catch (err) {
-    // ignore parse errors
-  }
-  if (response.status === 401) {
-    handleAuthenticationFailure(detail || 'Authentication required.');
-  }
-  throw new Error(detail || 'Request failed');
 }
 
 function isAdminUser() {
@@ -1845,34 +1805,6 @@ function renderDynamicFields(tool, action) {
   });
 }
 
-// WHAT: display prior corrections for the selected prompt.
-// WHY: reviewers need quick context on earlier edits before making another change.
-// HOW: filter `state.corrected` for the active prompt id, sort versions chronologically, and render them so reviewers can preview past triggers without leaving the editor.
-function renderVersionHistory() {
-  if (!el.versionHistory) return;
-  el.versionHistory.innerHTML = '';
-  if (!state.selectedPrompt) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'hint';
-    placeholder.textContent = 'Version history will appear once you select a prompt.';
-    el.versionHistory.appendChild(placeholder);
-    return;
-  }
-  const history = state.corrected
-    .filter((record) => record.id === state.selectedPrompt?.prompt_id)
-    .sort((a, b) => (a.version || 0) - (b.version || 0));
-  if (!history.length) {
-    return;
-  }
-  const list = document.createElement('ul');
-  history.forEach((record) => {
-    const item = document.createElement('li');
-    item.textContent = `Version ${record.version} • ${new Date(record.timestamp).toLocaleString()}`;
-    list.appendChild(item);
-  });
-  el.versionHistory.appendChild(list);
-}
-
 // WHAT: toggle the Trigger/Correct button label and disabled state.
 // WHY: prevents reviewers from firing incomplete payloads and clarifies whether a change is mutating.
 // HOW: look at the reviewer’s chosen intent/action and field values, then flip the button label (Trigger vs Correct) so submissions always reflect both requirements and whether the tool mutates data.
@@ -1908,35 +1840,6 @@ function updateCorrectButtonState() {
 // WHAT: populate the summary of the most recently triggered correction.
 // WHY: provides a quick confirmation reference when reviewers fire multiple actions.
 // HOW: populate the sidebar text/pre block with the latest record (or a placeholder) so reviewers immediately see the last action they triggered after refreshes.
-function renderLatestConfirmed() {
-  if (!state.latestConfirmed) {
-    if (el.latestConfirmedTitle) {
-      el.latestConfirmedTitle.textContent = 'No corrections yet.';
-    }
-    if (el.latestConfirmedMeta) {
-      el.latestConfirmedMeta.textContent = 'Saved records will appear here.';
-    }
-    if (el.latestConfirmedPayload) {
-      el.latestConfirmedPayload.innerHTML = '';
-    }
-    return;
-  }
-  const record = state.latestConfirmed;
-  if (el.latestConfirmedTitle) {
-    el.latestConfirmedTitle.textContent = record.prompt_text || 'Triggered prompt';
-  }
-  if (el.latestConfirmedMeta) {
-    const reviewerText = record.reviewer_id ? `Reviewer ${record.reviewer_id} • ` : '';
-    el.latestConfirmedMeta.textContent = `${reviewerText}${record.reviewer_intent} v${record.version}`;
-  }
-  if (el.latestConfirmedPayload) {
-    const pre = document.createElement('pre');
-    pre.textContent = JSON.stringify(record.corrected_payload, null, 2);
-    el.latestConfirmedPayload.innerHTML = '';
-    el.latestConfirmedPayload.appendChild(pre);
-  }
-}
-
 function renderCorrectionForm() {
   if (!el.intentSelect || !el.actionSelect) return;
   renderRelatedPrompts();
@@ -2054,6 +1957,11 @@ configurePendingQueue({
   selectPendingPrompt,
   prepareParserFields,
   applyPronounResolution,
+});
+
+configureVoiceInbox({
+  loadPending,
+  refreshActiveDataTab,
 });
 
 configurePendingPolling({

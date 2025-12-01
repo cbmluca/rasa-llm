@@ -8,9 +8,14 @@ import {
 } from './shared.js';
 import { fetchJSON } from './api.js';
 import { showToast, formatDanishDateString } from './utils.js';
+import {
+  renderTodos,
+  renderTodoCrudForm,
+  applyTodoSelectionFromState,
+  configureTodoTool,
+} from './todoTool.js';
 
 const dependencies = {
-  renderTodoCrudForm: () => {},
   renderCalendarCrudForm: () => {},
   applyCalendarSelectionFromState: () => {},
   renderKitchenCrudForm: () => {},
@@ -113,8 +118,8 @@ export async function fetchStore(store) {
   if (store === 'todos') {
     state.dataStores.todos = data.todos || [];
     renderTodos();
-    dependencies.renderTodoCrudForm();
-    dependencies.applyTodoSelectionFromState();
+    renderTodoCrudForm();
+    applyTodoSelectionFromState();
   } else if (store === 'calendar') {
     state.dataStores.calendar = data.events || [];
     renderCalendar();
@@ -671,6 +676,12 @@ export async function mutateStore(store, payload = {}) {
     return null;
   }
 }
+
+configureTodoTool({
+  mutateStore,
+  setSelectedDataRow,
+  clearSelectedDataRow,
+});
 
 export function renderTodoSortIndicators() {
   if (!el.todoSortButtons) return;
