@@ -118,5 +118,25 @@
     "reviewer_id": "LCBM",
     "pending_id": null,
     "voice_minutes": 0.0
+  },
+  {
+    "id": "610ee7b621bd43faac9d9f8c5a777486",
+    "timestamp": "2025-12-01T19:45:18.933970+00:00",
+    "audio_path": "data_pipeline/voice_uploads/610ee7b621bd43faac9d9f8c5a777486.webm",
+    "transcribed_text": "This is a test for",
+    "status": "completed",
+    "reviewer_id": "LCBM",
+    "pending_id": null,
+    "voice_minutes": 0.029
+  },
+  {
+    "id": "b79501b7eba843358887c5e46c042235",
+    "timestamp": "2025-12-01T19:45:45.743001+00:00",
+    "audio_path": "data_pipeline/voice_uploads/b79501b7eba843358887c5e46c042235.webm",
+    "transcribed_text": "Create a to-do called \"Online voice event\" due tomorrow.",
+    "status": "completed",
+    "reviewer_id": "LCBM",
+    "pending_id": "585208bebd334a998b8a55a9aaea1758",
+    "voice_minutes": 0.071
   }
 ]

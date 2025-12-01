@@ -113,3 +113,19 @@ export function orderPayloadForDisplay(payload) {
   });
   return ordered;
 }
+
+// WHAT: format ISO `YYYY-MM-DD` (optionally with time) strings as Danish `DD-MM-YYYY`.
+// WHY: reviewers operate in Danish locales and expect day-first ordering everywhere in the UI.
+// HOW: detect ISO-like strings, flip the components, preserve HH:MM if present, and fall back to the original text otherwise.
+export function formatDanishDateString(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}))?/);
+  if (!match) {
+    return value;
+  }
+  const [, year, month, day, time] = match;
+  const dateText = `${day}-${month}-${year}`;
+  return time ? `${dateText} ${time}` : dateText;
+}
