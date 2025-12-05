@@ -5,7 +5,7 @@ import {
   VOICE_MIN_DURATION_MS,
   VOICE_MAX_DURATION_MS,
   VOICE_MIME_TYPES,
-} from './shared.js';
+} from './helpers/shared.js';
 import { setChatStatus, setVoiceStatus, showToast } from './utils.js';
 import { appendAssistantReply, persistChatHistory, renderChat } from './chat.js';
 

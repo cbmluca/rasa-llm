@@ -1,4 +1,4 @@
-import { el, state, STORAGE_KEYS, PURGE_MAX_AGE_DAYS, TRAINING_ALERT_INCREMENT } from './shared.js';
+import { el, state, STORAGE_KEYS, PURGE_MAX_AGE_DAYS, TRAINING_ALERT_INCREMENT } from './helpers/shared.js';
 import { formatTimestamp } from './utils.js';
 
 export function renderGovernanceStats() {

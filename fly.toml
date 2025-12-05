@@ -37,3 +37,7 @@ primary_region = 'arn'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+[[mounts]]
+  source = "data_pipeline"
+  destination = "/app/data_pipeline"

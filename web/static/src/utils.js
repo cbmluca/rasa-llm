@@ -1,4 +1,4 @@
-import { el, state, DISPLAY_META_FIELDS, FIELD_ORDER } from './shared.js';
+import { el, state, DISPLAY_META_FIELDS, FIELD_ORDER } from './helpers/shared.js';
 
 let toastHideTimer = null;
 const TOAST_AUTO_HIDE_TYPES = new Set(['info', 'success']);

@@ -1,5 +1,5 @@
-import { state, el } from './shared.js';
-import { fetchJSON } from './api.js';
+import { state, el } from './helpers/shared.js';
+import { fetchJSON } from './helpers/api.js';
 import { showToast } from './utils.js';
 import { appendAssistantReply } from './chat.js';
 
@@ -191,4 +191,14 @@ export function changeVoiceInboxPage(delta) {
   const nextPage = Math.max(1, state.voiceInbox.page + delta);
   if (delta < 0 && nextPage === state.voiceInbox.page) return;
   loadVoiceInbox({ page: nextPage });
+}
+
+export function wireVoiceInboxControls() {
+  el.voiceRefresh?.addEventListener('click', () => loadVoiceInbox({ resetPage: true }));
+  el.voicePrev?.addEventListener('click', () => changeVoiceInboxPage(-1));
+  el.voiceNext?.addEventListener('click', () => changeVoiceInboxPage(1));
+}
+
+export async function initializeVoiceInbox() {
+  await loadVoiceInbox({ resetPage: true });
 }

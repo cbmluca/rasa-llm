@@ -1,6 +1,6 @@
-import { state, el, STORAGE_KEYS } from './shared.js';
-import { fetchJSON } from './api.js';
-import { setChatStatus, showToast } from './utils.js';
+import { state, el, STORAGE_KEYS } from './helpers/shared.js';
+import { fetchJSON } from './helpers/api.js';
+import { hideToast, setChatStatus, showToast } from './utils.js';
 
 const dependencies = {
   loadPending: null,
@@ -303,4 +303,61 @@ export async function replayOfflineChatRecord(record, options = {}) {
   } finally {
     state.pendingChatEntry = null;
   }
+}
+
+export function wireChatControls() {
+  el.chatForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const message = el.chatInput.value.trim();
+    if (!message) return;
+    const userEntry = { role: 'user', text: message, entryId: null };
+    state.chat.push(userEntry);
+    state.pendingChatEntry = userEntry;
+    persistChatHistory();
+    renderChat();
+    if (state.selectedPrompt) {
+      updateRelatedPromptOptions();
+    }
+    el.chatInput.value = '';
+    setChatStatus('Running…');
+    try {
+      const reply = await fetchJSON('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      });
+      appendAssistantReply(reply);
+      if (state.selectedPrompt) {
+        updateRelatedPromptOptions();
+      }
+      await Promise.all([loadPending(true), refreshActiveDataTab()]);
+    } catch (err) {
+      if (isOfflineError(err)) {
+        queueOfflineChatMessage(message, userEntry);
+      } else {
+        showToast(err.message || 'Chat failed', 'error');
+      }
+      state.pendingChatEntry = null;
+    } finally {
+      setChatStatus('Ready');
+    }
+  });
+
+  el.offlineQueueRetryBtn?.addEventListener('click', () => {
+    retryOfflineChatQueue();
+  });
+
+  el.toastClose?.addEventListener('click', hideToast);
+
+  window.addEventListener('online', () => {
+    renderOfflineQueueBanner();
+    if (state.offlineChatQueue.length) {
+      showToast('Back online. Retrying queued prompts…', 'info');
+      retryOfflineChatQueue({ silent: true });
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    renderOfflineQueueBanner();
+    showToast('Offline: prompts will queue until you retry.', 'warning');
+  });
 }

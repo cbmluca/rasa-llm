@@ -3,6 +3,7 @@
 ## Quick Start
 - Activate `.venv` (alias `act` → `source .venv/bin/activate`).
 - CLI entry `./start orch`; web UI `./start web` (FastAPI + static dashboard).
+- Always run `act` (or source `.venv/bin/activate`) in this repo before starting the server so the dependencies stay in the virtualenv—after that you can `./start web` without reinstalling anything.
 - Flow reminder: shared parser (`core/parsers/*`) → `NLUService` → `Orchestrator` → Tier‑3 tool or `LLMRouter` fallback. Logs land in `logs/turns.jsonl`, review queue in `data_pipeline/nlu_training_bucket/`.
 - Tool stores live under `data_pipeline/{todos,kitchen_tips,calendar,app_guide}.json`; helpers in `core/json_storage.py` keep writes atomic.
 

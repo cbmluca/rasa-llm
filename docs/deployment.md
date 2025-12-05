@@ -29,3 +29,4 @@ This builds the Docker image (using `Dockerfile` + `requirements.txt`) and runs 
 - Reviewer token is required for every `/api/*` route except `/api/health` and `/`.
 - Voice uploads are stored on-disk under `/app/data_pipeline/voice_uploads/` per instance; add a retention job later if storage becomes tight.
 - `/api/voice_inbox` now surfaces stored clips with replay/rerun/delete actions, and `/api/stats` reports `voice_stats` so you can watch minute budgets each day.
+- Mount a Fly volume at `/app/data_pipeline` (matching the `fly.toml` `[[mounts]]` block) so your queue, review, and tool files persist across deploys. Create it with `fly volumes create data_pipeline 1 --region arn` (adjust region) before deploying.
